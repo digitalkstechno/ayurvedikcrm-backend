@@ -93,6 +93,7 @@ const getLeads = async (req, res) => {
         .populate('reason_call', 'name')
         .populate('customer', 'name phone_number')
         .populate('deletedBy', 'name')
+        .populate('addedBy', 'name')
         .limit(limit * 1)
         .skip((page - 1) * limit)
         .sort({ createdAt: -1 })
@@ -104,6 +105,9 @@ const getLeads = async (req, res) => {
       if (lead.customer) {
         lead.name = lead.customer.name;
         lead.phone_number = lead.customer.phone_number;
+      }
+      if (lead.addedBy && lead.addedBy.name) {
+        lead.addedByName = lead.addedBy.name;
       }
       return lead;
     });
@@ -208,7 +212,16 @@ const createLead = async (req, res) => {
 
     const payload = { ...rest, customer: customerId, isRepeat: Boolean(req.body.isRepeat) };
     if (!isAdmin) {
-      payload.assgin = req.user ? req.user._id : undefined;
+      if (payload.isRepeat && req.body.assgin) {
+        payload.assgin = req.body.assgin;
+        payload.addedBy = req.user ? req.user._id : undefined;
+      } else {
+        payload.assgin = req.user ? req.user._id : undefined;
+      }
+    } else {
+      if (payload.isRepeat) {
+        payload.addedBy = req.user ? req.user._id : undefined;
+      }
     }
 
     const lead = await Lead.create(payload);

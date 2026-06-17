@@ -42,7 +42,8 @@ const leadSchema = mongoose.Schema({
   isDeleted: { type: Boolean, default: false },
   isRepeat: { type: Boolean, default: false },
   deleteDate: { type: Date },
-  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, {
   timestamps: true
 });
