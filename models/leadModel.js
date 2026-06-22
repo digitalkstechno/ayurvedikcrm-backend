@@ -25,6 +25,9 @@ const leadSchema = mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  age: { type: Number },
+  gender: { type: String, enum: ['Male', 'Female', 'Other'] },
+  address: { type: String },
   status: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Status'
