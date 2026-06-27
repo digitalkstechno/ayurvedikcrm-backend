@@ -31,7 +31,12 @@ const getLeads = async (req, res) => {
         ]
       });
       const customerIds = matchedCustomers.map(c => c._id);
-      query.customer = { $in: customerIds };
+      
+      query.$or = [
+        { customer: { $in: customerIds } },
+        { note: { $regex: search, $options: 'i' } },
+        { 'products.name': { $regex: search, $options: 'i' } }
+      ];
     }
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
@@ -335,7 +340,12 @@ const exportLeads = async (req, res) => {
         ]
       });
       const customerIds = matchedCustomers.map(c => c._id);
-      query.customer = { $in: customerIds };
+      
+      query.$or = [
+        { customer: { $in: customerIds } },
+        { note: { $regex: search, $options: 'i' } },
+        { 'products.name': { $regex: search, $options: 'i' } }
+      ];
     }
     if (assgin && assgin !== 'all') query.assgin = assgin;
     if (status && status !== 'all') query.status = status;
