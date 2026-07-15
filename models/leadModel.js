@@ -37,6 +37,7 @@ const leadSchema = mongoose.Schema({
     ref: 'ReasonToCall'
   },
   note: { type: String },
+  remark: { type: String },
   reminder: { type: String },
   orderStatus: { type: Boolean, default: false },
   paymentType: { type: String },
