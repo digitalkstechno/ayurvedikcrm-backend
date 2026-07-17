@@ -1,7 +1,7 @@
 const Lead = require('../models/leadModel');
 const Customer = require('../models/customerModel');
 const ActivityLog = require('../models/activityLogModel');
-
+const { sendLeadEventToFacebook } = require('../services/facebookCapi');
 
 // @desc    Get all leads
 // @route   GET /api/leads
@@ -207,6 +207,14 @@ const createLead = async (req, res) => {
     }
 
     const lead = await Lead.create(payload);
+
+    // Send event to Facebook Conversions API
+    if (phone_number) {
+      sendLeadEventToFacebook({
+        email: req.body.email,
+        phone: phone_number
+      });
+    }
 
     // Create activity log
     if (req.user) {
