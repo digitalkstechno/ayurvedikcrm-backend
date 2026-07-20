@@ -203,6 +203,21 @@ const createLead = async (req, res) => {
       return res.status(400).json({ message: 'Valid phone number required to assign customer reference' });
     }
 
+    // Check if an active lead for this customer already exists
+    if (!req.body.isRepeat) {
+      const activeLead = await Lead.findOne({ 
+        customer: customerId, 
+        isDeleted: { $ne: true },
+        orderStatus: { $ne: true }
+      }).populate('assgin', 'name');
+
+      if (activeLead) {
+        return res.status(400).json({ 
+          message: `This lead is already assigned to ${activeLead.assgin ? activeLead.assgin.name : 'another staff'}.` 
+        });
+      }
+    }
+
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
       req.user.roles.includes('admin') ||

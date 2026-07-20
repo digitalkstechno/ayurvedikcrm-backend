@@ -167,4 +167,42 @@ const resetPassword = async (req, res) => {
   }
 };
 
-module.exports = { loginUser, forgotPassword, resetPassword };
+// @desc    Auth user & get token without password (Admin only)
+// @route   POST /api/auth/login-as
+const loginAs = async (req, res) => {
+  try {
+    const { userId } = req.body;
+    if (!userId) {
+      return res.status(400).json({ message: 'Please provide userId' });
+    }
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Fetch the roles' permissions
+    const roleDocs = await Role.find({ name: { $in: user.roles } });
+    let permissions = {};
+    roleDocs.forEach(r => {
+      if (r.permissions) {
+        permissions = { ...permissions, ...r.permissions };
+      }
+    });
+
+    // Generate token using helper
+    const token = generateToken(user._id, user.email, user.roles);
+
+    res.status(200).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      roles: user.roles,
+      permissions: permissions,
+      token: token
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+module.exports = { loginUser, forgotPassword, resetPassword, loginAs };
