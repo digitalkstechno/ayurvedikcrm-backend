@@ -1,5 +1,7 @@
+const mongoose = require('mongoose');
 const ReturnOrder = require('../models/returnOrderModel');
 const Order = require('../models/orderModel');
+const User = require('../models/userModel');
 
 // @desc    Get all return orders
 // @route   GET /api/return-orders
@@ -31,13 +33,44 @@ const getReturnOrders = async (req, res) => {
     }
 
     if (search) {
+      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
+      const matchedUsers = await User.find({ name: { $regex: flexibleSearchPattern, $options: 'i' } }).select('_id');
+      const userIds = matchedUsers.map(u => u._id);
+
+      const terms = search.trim().split(/\s+/).filter(t => t.length > 0);
+      const productAllQuery = terms.length > 0 ? {
+        products: {
+          $all: terms.map(term => ({
+            $elemMatch: { name: { $regex: term, $options: 'i' } }
+          }))
+        }
+      } : null;
+
+      const searchOr = [
+        { customerName: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { phone_number: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { type: { $regex: flexibleSearchPattern, $options: 'i' } }
+      ];
+
+      if (userIds.length > 0) {
+        searchOr.push({ assginTo: { $in: userIds } });
+      }
+
+      if (productAllQuery) {
+        searchOr.push(productAllQuery);
+      }
+
+      if (!isNaN(search) && search.trim() !== '') {
+        const num = Number(search);
+        searchOr.push({ amount: num });
+        searchOr.push({ 'products.amount': num });
+        searchOr.push({ 'products.subtotal': num });
+      }
+
       if (!query.$and) query.$and = [];
-      query.$and.push({
-        $or: [
-          { customerName: { $regex: search, $options: 'i' } },
-          { phone_number: { $regex: search, $options: 'i' } }
-        ]
-      });
+      query.$and.push({ $or: searchOr });
     }
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
@@ -246,7 +279,7 @@ const getStaffReturnStats = async (req, res) => {
 
 const exportReturnOrders = async (req, res) => {
   try {
-    const { search = '', assginTo, product, startDate, endDate, orderStartDate, orderEndDate } = req.query;
+    const { search = '', assginTo, product, type, startDate, endDate, orderStartDate, orderEndDate } = req.query;
     const query = { isDeleted: { $ne: true } };
 
     if (orderStartDate || orderEndDate) {
@@ -271,16 +304,55 @@ const exportReturnOrders = async (req, res) => {
     }
 
     if (search) {
+      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
+      const matchedUsers = await User.find({ name: { $regex: flexibleSearchPattern, $options: 'i' } }).select('_id');
+      const userIds = matchedUsers.map(u => u._id);
+
+      const terms = search.trim().split(/\s+/).filter(t => t.length > 0);
+      const productAllQuery = terms.length > 0 ? {
+        products: {
+          $all: terms.map(term => ({
+            $elemMatch: { name: { $regex: term, $options: 'i' } }
+          }))
+        }
+      } : null;
+
+      const searchOr = [
+        { customerName: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { phone_number: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { type: { $regex: flexibleSearchPattern, $options: 'i' } }
+      ];
+
+      if (userIds.length > 0) {
+        searchOr.push({ assginTo: { $in: userIds } });
+      }
+
+      if (productAllQuery) {
+        searchOr.push(productAllQuery);
+      }
+
+      if (!isNaN(search) && search.trim() !== '') {
+        const num = Number(search);
+        searchOr.push({ amount: num });
+        searchOr.push({ 'products.amount': num });
+        searchOr.push({ 'products.subtotal': num });
+      }
+
       if (!query.$and) query.$and = [];
-      query.$and.push({
-        $or: [
-          { customerName: { $regex: search, $options: 'i' } },
-          { phone_number: { $regex: search, $options: 'i' } }
-        ]
-      });
+      query.$and.push({ $or: searchOr });
     }
-    if (assginTo && assginTo !== 'all') query.assginTo = assginTo;
-    if (product && product !== 'all') query['products.name'] = { $regex: product, $options: 'i' };
+
+    if (assginTo && assginTo !== 'all' && assginTo !== '') {
+      query.assginTo = { $in: assginTo.split(',') };
+    }
+    if (product && product !== 'all' && product !== '') {
+      query['products.productId'] = { $in: product.split(',') };
+    }
+    if (type && type !== 'all' && type !== '') {
+      query.type = { $in: type.split(',') };
+    }
 
     if (startDate || endDate) {
       query.createdAt = {};

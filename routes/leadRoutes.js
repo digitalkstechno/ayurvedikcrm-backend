@@ -1,10 +1,13 @@
 const express = require('express');
 const router = express.Router();
-const { getLeads, getLeadById, createLead, updateLead, deleteLead, exportLeads, getLatestLeadByPhone } = require('../controllers/leadController');
+const { getLeads, getLeadById, createLead, createPublicLead, updateLead, deleteLead, exportLeads, getLatestLeadByPhone } = require('../controllers/leadController');
 const { protect } = require('../middlewares/authMiddleware');
 
 router.route('/latest/:phone')
   .get(protect, getLatestLeadByPhone);
+
+router.route('/public-create')
+  .post(createPublicLead);
 
 router.route('/')
   .get(protect, getLeads)

@@ -10,13 +10,17 @@ const getUsers = async (req, res) => {
     const search = req.query.search || '';
     const skip = (page - 1) * limit;
 
+    const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
     const filter = search
       ? {
           $or: [
-            { name: { $regex: search, $options: 'i' } },
-            { email: { $regex: search, $options: 'i' } },
-            { mobile_number: { $regex: search, $options: 'i' } },
-            { company_number: { $regex: search, $options: 'i' } }
+            { name: { $regex: flexibleSearchPattern, $options: 'i' } },
+            { email: { $regex: flexibleSearchPattern, $options: 'i' } },
+            { mobile_number: { $regex: flexibleSearchPattern, $options: 'i' } },
+            { company_number: { $regex: flexibleSearchPattern, $options: 'i' } },
+            { roles: { $regex: flexibleSearchPattern, $options: 'i' } }
           ]
         }
       : {};

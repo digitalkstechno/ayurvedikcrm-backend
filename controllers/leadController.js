@@ -12,7 +12,7 @@ const ReasonToCall = require('../models/reasonToCallModel');
 // @access  Public
 const getLeads = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = '', assgin, status, reason_call, product, startDate, endDate, reminderStartDate, reminderEndDate, isRepeat, isDeleted, age } = req.query;
+    const { page = 1, limit = 10, search = '', assgin, status, reason_call, product, startDate, endDate, reminderStartDate, reminderEndDate, isRepeat, isDeleted, age, orderStatus } = req.query;
     const query = {};
     
     if (isDeleted === 'true') {
@@ -81,6 +81,13 @@ const getLeads = async (req, res) => {
         query.$or.push(productAllQuery);
       }
 
+      const searchLower = search.toLowerCase().trim();
+      if (searchLower === 'converted') {
+        query.$or.push({ orderStatus: true });
+      } else if (searchLower === 'convert to order' || searchLower === 'convert') {
+        query.$or.push({ orderStatus: { $ne: true } });
+      }
+
       if (!isNaN(search) && search.trim() !== '') {
         const num = Number(search);
         query.$or.push({ age: num });
@@ -133,6 +140,10 @@ const getLeads = async (req, res) => {
           query.age = numAge;
         }
       }
+    }
+    
+    if (orderStatus !== undefined && orderStatus !== 'all' && orderStatus !== '') {
+      query.orderStatus = orderStatus === 'true';
     }
     
     if (startDate || endDate) {
@@ -317,6 +328,77 @@ const createLead = async (req, res) => {
   }
 };
 
+// @desc    Create a lead publicly (without auth token, phone_number is compulsory)
+// @route   POST /api/leads/public-create
+// @access  Public
+const createPublicLead = async (req, res) => {
+  try {
+    const { name, phone_number, ...rest } = req.body || {};
+    
+    if (!phone_number) {
+      return res.status(400).json({ message: 'Phone number is compulsory' });
+    }
+    
+    let existingCustomer = await Customer.findOne({ phone_number });
+    if (!existingCustomer) {
+      existingCustomer = await Customer.create({ name: name || 'Unknown', phone_number });
+    } else if (name && existingCustomer.name !== name) {
+      existingCustomer.name = name;
+      await existingCustomer.save();
+    }
+    const customerId = existingCustomer._id;
+
+    // Check if this customer already has other leads (isRepeat)
+    const leadCount = await Lead.countDocuments({ customer: customerId });
+    const isRepeat = leadCount > 0;
+
+    const payload = { 
+      ...rest, 
+      customer: customerId, 
+      isRepeat 
+    };
+
+    if (req.body.assgin) {
+      payload.assgin = req.body.assgin;
+    }
+
+    const lead = await Lead.create(payload);
+
+    // Send event to Facebook Conversions API
+    try {
+      sendLeadEventToFacebook({
+        email: req.body.email,
+        phone: phone_number
+      });
+    } catch (fbErr) {
+      console.error('Facebook Conversion API error:', fbErr.message);
+    }
+
+    // Find a default user to assign the ActivityLog (since it is required by schema)
+    let logUser = await User.findOne({ email: 'superadmin@gmail.com' });
+    if (!logUser) {
+      logUser = await User.findOne();
+    }
+    const logUserId = logUser ? logUser._id : null;
+
+    // Create activity log
+    await ActivityLog.create({
+      user: logUserId,
+      lead: lead._id,
+      action: 'Create',
+      message: 'Lead Created publicly'
+    });
+
+    res.status(201).json(lead);
+  } catch (error) {
+    if (error.code === 11000) {
+      const field = Object.keys(error.keyValue)[0];
+      return res.status(400).json({ message: `A record with this ${field} already exists.` });
+    }
+    res.status(400).json({ message: error.message });
+  }
+};
+
 // @desc    Update a lead
 // @route   PUT /api/leads/:id
 // @access  Public
@@ -418,7 +500,7 @@ const deleteLead = async (req, res) => {
 
 const exportLeads = async (req, res) => {
   try {
-    const { search = '', assgin, status, reason_call, product, startDate, endDate, age } = req.query;
+    const { search = '', assgin, status, reason_call, product, startDate, endDate, age, orderStatus } = req.query;
     const query = { isDeleted: { $ne: true } };
     
     if (search) {
@@ -475,6 +557,13 @@ const exportLeads = async (req, res) => {
         query.$or.push(productAllQuery);
       }
 
+      const searchLower = search.toLowerCase().trim();
+      if (searchLower === 'converted') {
+        query.$or.push({ orderStatus: true });
+      } else if (searchLower === 'convert to order' || searchLower === 'convert') {
+        query.$or.push({ orderStatus: { $ne: true } });
+      }
+
       if (!isNaN(search) && search.trim() !== '') {
         const num = Number(search);
         query.$or.push({ age: num });
@@ -519,6 +608,10 @@ const exportLeads = async (req, res) => {
       }
     }
     
+    if (orderStatus !== undefined && orderStatus !== 'all' && orderStatus !== '') {
+      query.orderStatus = orderStatus === 'true';
+    }
+    
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
@@ -559,6 +652,7 @@ module.exports = {
   getLeads,
   getLeadById,
   createLead,
+  createPublicLead,
   updateLead,
   deleteLead,
   exportLeads,
