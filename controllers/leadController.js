@@ -389,7 +389,17 @@ const createPublicLead = async (req, res) => {
       message: 'Lead Created publicly'
     });
 
-    res.status(201).json(lead);
+    const populatedLead = await Lead.findById(lead._id)
+      .populate('assgin', 'name')
+      .populate('customer', 'name phone_number');
+
+    const obj = populatedLead.toObject();
+    if (obj.customer) {
+      obj.name = obj.customer.name;
+      obj.phone_number = obj.customer.phone_number;
+    }
+
+    res.status(201).json(obj);
   } catch (error) {
     if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
