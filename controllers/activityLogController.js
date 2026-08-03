@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const ActivityLog = require('../models/activityLogModel');
 const User = require('../models/userModel');
 const Customer = require('../models/customerModel');
@@ -12,15 +13,18 @@ const getActivityLogs = async (req, res) => {
     const query = {};
 
     if (search) {
+      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
       // Find users matching search
-      const matchedUsers = await User.find({ name: { $regex: search, $options: 'i' } });
+      const matchedUsers = await User.find({ name: { $regex: flexibleSearchPattern, $options: 'i' } });
       const userIds = matchedUsers.map(u => u._id);
 
       // Find customers matching search
       const matchedCustomers = await Customer.find({
         $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { phone_number: { $regex: search, $options: 'i' } }
+          { name: { $regex: flexibleSearchPattern, $options: 'i' } },
+          { phone_number: { $regex: flexibleSearchPattern, $options: 'i' } }
         ]
       });
       const customerIds = matchedCustomers.map(c => c._id);
@@ -30,7 +34,7 @@ const getActivityLogs = async (req, res) => {
       const leadIds = matchedLeads.map(l => l._id);
 
       query.$or = [
-        { message: { $regex: search, $options: 'i' } },
+        { message: { $regex: flexibleSearchPattern, $options: 'i' } },
         { user: { $in: userIds } },
         { lead: { $in: leadIds } }
       ];
@@ -46,7 +50,9 @@ const getActivityLogs = async (req, res) => {
     if (isAdmin) {
       // Admin can view all logs, optionally filtered by a specific user
       if (userId && userId !== 'all') {
-        query.user = userId;
+        if (mongoose.Types.ObjectId.isValid(userId)) {
+          query.user = new mongoose.Types.ObjectId(userId);
+        }
       }
     } else {
       // Non-admin can ONLY view their own logs

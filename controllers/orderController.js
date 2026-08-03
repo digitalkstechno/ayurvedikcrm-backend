@@ -1,6 +1,8 @@
+const mongoose = require('mongoose');
 const Order = require('../models/orderModel');
 const Lead = require('../models/leadModel');
 const ActivityLog = require('../models/activityLogModel');
+const User = require('../models/userModel');
 
 // @desc    Get all orders
 // @route   GET /api/orders
@@ -13,11 +15,37 @@ const getOrders = async (req, res) => {
     };
 
     if (search) {
+      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
+      const matchedUsers = await User.find({ name: { $regex: flexibleSearchPattern, $options: 'i' } }).select('_id');
+      const userIds = matchedUsers.map(u => u._id);
+
+      const terms = search.trim().split(/\s+/).filter(t => t.length > 0);
+      const productAllQuery = terms.length > 0 ? {
+        products: {
+          $all: terms.map(term => ({
+            $elemMatch: { name: { $regex: term, $options: 'i' } }
+          }))
+        }
+      } : null;
+
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { phone_number: { $regex: search, $options: 'i' } },
-        { transactionId: { $regex: search, $options: 'i' } }
+        { name: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { phone_number: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { transactionId: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { courier: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { paymentType: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { status: { $regex: flexibleSearchPattern, $options: 'i' } }
       ];
+
+      if (productAllQuery) {
+        query.$or.push(productAllQuery);
+      }
+
+      if (userIds.length > 0) {
+        query.$or.push({ assginTo: { $in: userIds } });
+      }
     }
 
     // Check if current user is admin/superadmin
@@ -27,15 +55,30 @@ const getOrders = async (req, res) => {
       req.user.email === 'superadmin@gmail.com'
     );
 
+    const parseObjectIdFilter = (val) => {
+      if (!val || val === 'all' || val === '') return undefined;
+      const ids = val.split(',')
+        .map(id => id.trim())
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+      return ids.length > 0 ? { $in: ids } : undefined;
+    };
+
     if (isAdmin) {
-      if (assginTo && assginTo !== 'all' && assginTo !== '') query.assginTo = { $in: assginTo.split(',') };
+      const assignFilter = parseObjectIdFilter(assginTo);
+      if (assignFilter) query.assginTo = assignFilter;
     } else {
       query.assginTo = req.user ? req.user._id : null;
     }
-    if (status && status !== 'all' && status !== '') query.status = { $in: status.split(',') };
-    if (courier && courier !== 'all' && courier !== '') query.courier = { $in: courier.split(',') };
+
+    if (status && status !== 'all' && status !== '') {
+      query.status = { $in: status.split(',').map(s => s.trim()) };
+    }
+    if (courier && courier !== 'all' && courier !== '') {
+      const courierRegexes = courier.split(',').map(c => new RegExp(`^${c.trim()}$`, 'i'));
+      query.courier = { $in: courierRegexes };
+    }
     if (product && product !== 'all' && product !== '') {
-      // product is an array of names from the frontend. We match any order that has at least one matching product name.
       query['products.name'] = { $regex: product.split(',').map(p => p.trim()).join('|'), $options: 'i' };
     }
 
@@ -229,17 +272,72 @@ const exportOrders = async (req, res) => {
     const query = { isDeleted: { $ne: true } };
 
     if (search) {
+      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
+      const matchedUsers = await User.find({ name: { $regex: flexibleSearchPattern, $options: 'i' } }).select('_id');
+      const userIds = matchedUsers.map(u => u._id);
+
+      const terms = search.trim().split(/\s+/).filter(t => t.length > 0);
+      const productAllQuery = terms.length > 0 ? {
+        products: {
+          $all: terms.map(term => ({
+            $elemMatch: { name: { $regex: term, $options: 'i' } }
+          }))
+        }
+      } : null;
+
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { phone_number: { $regex: search, $options: 'i' } },
-        { transactionId: { $regex: search, $options: 'i' } }
+        { name: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { phone_number: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { transactionId: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { courier: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { paymentType: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { status: { $regex: flexibleSearchPattern, $options: 'i' } }
       ];
+
+      if (productAllQuery) {
+        query.$or.push(productAllQuery);
+      }
+
+      if (userIds.length > 0) {
+        query.$or.push({ assginTo: { $in: userIds } });
+      }
     }
 
-    if (assginTo && assginTo !== 'all') query.assginTo = assginTo;
-    if (status && status !== 'all') query.status = status;
-    if (courier && courier !== 'all') query.courier = courier;
-    if (product && product !== 'all') query['product'] = { $regex: product, $options: 'i' };
+    // Check if current user is admin/superadmin
+    const isAdmin = req.user && (
+      req.user.roles.includes('admin') || 
+      req.user.roles.includes('superadmin') || 
+      req.user.email === 'superadmin@gmail.com'
+    );
+
+    const parseObjectIdFilter = (val) => {
+      if (!val || val === 'all' || val === '') return undefined;
+      const ids = val.split(',')
+        .map(id => id.trim())
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+      return ids.length > 0 ? { $in: ids } : undefined;
+    };
+
+    if (isAdmin) {
+      const assignFilter = parseObjectIdFilter(assginTo);
+      if (assignFilter) query.assginTo = assignFilter;
+    } else {
+      query.assginTo = req.user ? req.user._id : null;
+    }
+
+    if (status && status !== 'all' && status !== '') {
+      query.status = { $in: status.split(',').map(s => s.trim()) };
+    }
+    if (courier && courier !== 'all' && courier !== '') {
+      const courierRegexes = courier.split(',').map(c => new RegExp(`^${c.trim()}$`, 'i'));
+      query.courier = { $in: courierRegexes };
+    }
+    if (product && product !== 'all' && product !== '') {
+      query['products.name'] = { $regex: product.split(',').map(p => p.trim()).join('|'), $options: 'i' };
+    }
 
     if (startDate || endDate) {
       query.createdAt = {};

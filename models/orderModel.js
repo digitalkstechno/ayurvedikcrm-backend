@@ -38,6 +38,7 @@ const orderSchema = mongoose.Schema({
     ref: 'User'
   },
   transactionId: { type: String },
+  delivery_no: { type: String },
   status: {
     type: String,
     default: 'Dispatched'

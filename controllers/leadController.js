@@ -2,13 +2,17 @@ const Lead = require('../models/leadModel');
 const Customer = require('../models/customerModel');
 const ActivityLog = require('../models/activityLogModel');
 const { sendLeadEventToFacebook } = require('../services/facebookCapi');
+const mongoose = require('mongoose');
+const User = require('../models/userModel');
+const Status = require('../models/statusModel');
+const ReasonToCall = require('../models/reasonToCallModel');
 
 // @desc    Get all leads
 // @route   GET /api/leads
 // @access  Public
 const getLeads = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = '', assgin, status, reason_call, product, startDate, endDate, reminderStartDate, reminderEndDate, isRepeat, isDeleted } = req.query;
+    const { page = 1, limit = 10, search = '', assgin, status, reason_call, product, startDate, endDate, reminderStartDate, reminderEndDate, isRepeat, isDeleted, age } = req.query;
     const query = {};
     
     if (isDeleted === 'true') {
@@ -24,19 +28,65 @@ const getLeads = async (req, res) => {
     }
     
     if (search) {
-      const matchedCustomers = await Customer.find({
-        $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { phone_number: { $regex: search, $options: 'i' } }
-        ]
-      });
+      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
+      const [matchedCustomers, matchedUsers, matchedStatuses, matchedReasons] = await Promise.all([
+        Customer.find({
+          $or: [
+            { name: { $regex: flexibleSearchPattern, $options: 'i' } },
+            { phone_number: { $regex: flexibleSearchPattern, $options: 'i' } }
+          ]
+        }),
+        User.find({
+          name: { $regex: flexibleSearchPattern, $options: 'i' }
+        }),
+        Status.find({
+          name: { $regex: flexibleSearchPattern, $options: 'i' }
+        }),
+        ReasonToCall.find({
+          name: { $regex: flexibleSearchPattern, $options: 'i' }
+        })
+      ]);
+
       const customerIds = matchedCustomers.map(c => c._id);
-      
+      const userIds = matchedUsers.map(u => u._id);
+      const statusIds = matchedStatuses.map(s => s._id);
+      const reasonIds = matchedReasons.map(r => r._id);
+
+      const terms = search.trim().split(/\s+/).filter(t => t.length > 0);
+      const productAllQuery = terms.length > 0 ? {
+        products: {
+          $all: terms.map(term => ({
+            $elemMatch: { name: { $regex: term, $options: 'i' } }
+          }))
+        }
+      } : null;
+
       query.$or = [
         { customer: { $in: customerIds } },
-        { note: { $regex: search, $options: 'i' } },
-        { 'products.name': { $regex: search, $options: 'i' } }
+        { assgin: { $in: userIds } },
+        { status: { $in: statusIds } },
+        { reason_call: { $in: reasonIds } },
+        { remark: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { note: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { address: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { gender: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { paymentType: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { courier: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { transactionId: { $regex: flexibleSearchPattern, $options: 'i' } }
       ];
+
+      if (productAllQuery) {
+        query.$or.push(productAllQuery);
+      }
+
+      if (!isNaN(search) && search.trim() !== '') {
+        const num = Number(search);
+        query.$or.push({ age: num });
+        query.$or.push({ 'products.amount': num });
+        query.$or.push({ 'products.subtotal': num });
+      }
     }
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
@@ -45,14 +95,45 @@ const getLeads = async (req, res) => {
       req.user.email === 'superadmin@gmail.com'
     );
 
+    const parseObjectIdFilter = (val) => {
+      if (!val || val === 'all' || val === '') return undefined;
+      const ids = val.split(',')
+        .map(id => id.trim())
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+      return ids.length > 0 ? { $in: ids } : undefined;
+    };
+
+    const statusFilter = parseObjectIdFilter(status);
+    if (statusFilter) query.status = statusFilter;
+
+    const reasonFilter = parseObjectIdFilter(reason_call);
+    if (reasonFilter) query.reason_call = reasonFilter;
+
+    const productFilter = parseObjectIdFilter(product);
+    if (productFilter) query['products.productId'] = productFilter;
+
     if (isAdmin) {
-      if (assgin && assgin !== 'all' && assgin !== '') query.assgin = { $in: assgin.split(',') };
+      const assignFilter = parseObjectIdFilter(assgin);
+      if (assignFilter) query.assgin = assignFilter;
     } else {
       query.assgin = req.user ? req.user._id : null;
     }
-    if (status && status !== 'all' && status !== '') query.status = { $in: status.split(',') };
-    if (reason_call && reason_call !== 'all' && reason_call !== '') query.reason_call = { $in: reason_call.split(',') };
-    if (product && product !== 'all' && product !== '') query['products.productId'] = { $in: product.split(',') };
+
+    if (age && age !== 'all' && age !== '') {
+      if (age.includes('-')) {
+        const [min, max] = age.split('-').map(Number);
+        query.age = { $gte: min, $lte: max };
+      } else if (age.endsWith('+')) {
+        const min = Number(age.replace('+', ''));
+        query.age = { $gte: min };
+      } else {
+        const numAge = Number(age);
+        if (!isNaN(numAge)) {
+          query.age = numAge;
+        }
+      }
+    }
     
     if (startDate || endDate) {
       query.createdAt = {};
@@ -337,28 +418,106 @@ const deleteLead = async (req, res) => {
 
 const exportLeads = async (req, res) => {
   try {
-    const { search = '', assgin, status, reason_call, product, startDate, endDate } = req.query;
+    const { search = '', assgin, status, reason_call, product, startDate, endDate, age } = req.query;
     const query = { isDeleted: { $ne: true } };
     
     if (search) {
-      const matchedCustomers = await Customer.find({
-        $or: [
-          { name: { $regex: search, $options: 'i' } },
-          { phone_number: { $regex: search, $options: 'i' } }
-        ]
-      });
+      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
+
+      const [matchedCustomers, matchedUsers, matchedStatuses, matchedReasons] = await Promise.all([
+        Customer.find({
+          $or: [
+            { name: { $regex: flexibleSearchPattern, $options: 'i' } },
+            { phone_number: { $regex: flexibleSearchPattern, $options: 'i' } }
+          ]
+        }),
+        User.find({
+          name: { $regex: flexibleSearchPattern, $options: 'i' }
+        }),
+        Status.find({
+          name: { $regex: flexibleSearchPattern, $options: 'i' }
+        }),
+        ReasonToCall.find({
+          name: { $regex: flexibleSearchPattern, $options: 'i' }
+        })
+      ]);
+
       const customerIds = matchedCustomers.map(c => c._id);
-      
+      const userIds = matchedUsers.map(u => u._id);
+      const statusIds = matchedStatuses.map(s => s._id);
+      const reasonIds = matchedReasons.map(r => r._id);
+
+      const terms = search.trim().split(/\s+/).filter(t => t.length > 0);
+      const productAllQuery = terms.length > 0 ? {
+        products: {
+          $all: terms.map(term => ({
+            $elemMatch: { name: { $regex: term, $options: 'i' } }
+          }))
+        }
+      } : null;
+
       query.$or = [
         { customer: { $in: customerIds } },
-        { note: { $regex: search, $options: 'i' } },
-        { 'products.name': { $regex: search, $options: 'i' } }
+        { assgin: { $in: userIds } },
+        { status: { $in: statusIds } },
+        { reason_call: { $in: reasonIds } },
+        { remark: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { note: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { address: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { gender: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { paymentType: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { courier: { $regex: flexibleSearchPattern, $options: 'i' } },
+        { transactionId: { $regex: flexibleSearchPattern, $options: 'i' } }
       ];
+
+      if (productAllQuery) {
+        query.$or.push(productAllQuery);
+      }
+
+      if (!isNaN(search) && search.trim() !== '') {
+        const num = Number(search);
+        query.$or.push({ age: num });
+        query.$or.push({ 'products.amount': num });
+        query.$or.push({ 'products.subtotal': num });
+      }
     }
-    if (assgin && assgin !== 'all') query.assgin = assgin;
-    if (status && status !== 'all') query.status = status;
-    if (reason_call && reason_call !== 'all') query.reason_call = reason_call;
-    if (product && product !== 'all') query['products.productId'] = product;
+
+    const parseObjectIdFilter = (val) => {
+      if (!val || val === 'all' || val === '') return undefined;
+      const ids = val.split(',')
+        .map(id => id.trim())
+        .filter(id => mongoose.Types.ObjectId.isValid(id))
+        .map(id => new mongoose.Types.ObjectId(id));
+      return ids.length > 0 ? { $in: ids } : undefined;
+    };
+
+    const statusFilter = parseObjectIdFilter(status);
+    if (statusFilter) query.status = statusFilter;
+
+    const reasonFilter = parseObjectIdFilter(reason_call);
+    if (reasonFilter) query.reason_call = reasonFilter;
+
+    const productFilter = parseObjectIdFilter(product);
+    if (productFilter) query['products.productId'] = productFilter;
+
+    const assignFilter = parseObjectIdFilter(assgin);
+    if (assignFilter) query.assgin = assignFilter;
+
+    if (age && age !== 'all' && age !== '') {
+      if (age.includes('-')) {
+        const [min, max] = age.split('-').map(Number);
+        query.age = { $gte: min, $lte: max };
+      } else if (age.endsWith('+')) {
+        const min = Number(age.replace('+', ''));
+        query.age = { $gte: min };
+      } else {
+        const numAge = Number(age);
+        if (!isNaN(numAge)) {
+          query.age = numAge;
+        }
+      }
+    }
     
     if (startDate || endDate) {
       query.createdAt = {};
