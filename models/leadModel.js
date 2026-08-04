@@ -43,6 +43,7 @@ const leadSchema = mongoose.Schema({
   paymentType: { type: String },
   courier: { type: String },
   transactionId: { type: String },
+  deliveryNo: { type: String },
   isDeleted: { type: Boolean, default: false },
   isRepeat: { type: Boolean, default: false },
   deleteDate: { type: Date }

@@ -14,19 +14,19 @@ const getLeads = async (req, res) => {
   try {
     const { page = 1, limit = 10, search = '', assgin, status, reason_call, product, startDate, endDate, reminderStartDate, reminderEndDate, isRepeat, isDeleted, age, orderStatus } = req.query;
     const query = {};
-    
+
     if (isDeleted === 'true') {
       query.isDeleted = true;
     } else {
       query.isDeleted = { $ne: true };
     }
-    
+
     if (isRepeat === 'true') {
       query.isRepeat = true;
     } else {
       query.isRepeat = { $ne: true };
     }
-    
+
     if (search) {
       const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
@@ -97,8 +97,8 @@ const getLeads = async (req, res) => {
     }
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
-      req.user.roles.includes('admin') || 
-      req.user.roles.includes('superadmin') || 
+      req.user.roles.includes('admin') ||
+      req.user.roles.includes('superadmin') ||
       req.user.email === 'superadmin@gmail.com'
     );
 
@@ -141,11 +141,11 @@ const getLeads = async (req, res) => {
         }
       }
     }
-    
+
     if (orderStatus !== undefined && orderStatus !== 'all' && orderStatus !== '') {
       query.orderStatus = orderStatus === 'true';
     }
-    
+
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
@@ -161,7 +161,7 @@ const getLeads = async (req, res) => {
       if (reminderStartDate) query.reminder.$gte = reminderStartDate;
       if (reminderEndDate) query.reminder.$lte = reminderEndDate;
     }
-    
+
     const [leads, count] = await Promise.all([
       Lead.find(query)
         .populate('assgin', 'name')
@@ -174,7 +174,7 @@ const getLeads = async (req, res) => {
         .lean(),
       Lead.countDocuments(query)
     ]);
-      
+
     const mappedLeads = leads.map(lead => {
       if (lead.customer) {
         lead.name = lead.customer.name;
@@ -182,7 +182,7 @@ const getLeads = async (req, res) => {
       }
       return lead;
     });
-    
+
     res.status(200).json({
       data: mappedLeads,
       total: count,
@@ -191,7 +191,7 @@ const getLeads = async (req, res) => {
       totalPages: Math.ceil(count / limit)
     });
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -219,7 +219,7 @@ const getLeadById = async (req, res) => {
     }
     res.status(200).json(obj);
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -237,25 +237,25 @@ const getLatestLeadByPhone = async (req, res) => {
     if (!customer) {
       return res.status(404).json({ message: 'No customer found with this phone number' });
     }
-    
+
     const latestLead = await Lead.findOne({ customer: customer._id })
       .populate('assgin', 'name')
       .populate('status', 'name color')
       .populate('reason_call', 'name')
       .populate('products.productId', 'name amount')
       .sort({ createdAt: -1 });
-      
+
     if (!latestLead) {
       return res.status(404).json({ message: 'No leads found for this customer' });
     }
-    
+
     const obj = latestLead.toObject();
     obj.name = customer.name;
     obj.phone_number = customer.phone_number;
-    
+
     res.status(200).json(obj);
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -270,7 +270,7 @@ const createLead = async (req, res) => {
   try {
     const { name, phone_number, ...rest } = req.body;
     let customerId = null;
-    
+
     if (phone_number) {
       let existingCustomer = await Customer.findOne({ phone_number });
       if (!existingCustomer) {
@@ -288,8 +288,8 @@ const createLead = async (req, res) => {
 
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
-      req.user.roles.includes('admin') || 
-      req.user.roles.includes('superadmin') || 
+      req.user.roles.includes('admin') ||
+      req.user.roles.includes('superadmin') ||
       req.user.email === 'superadmin@gmail.com'
     );
 
@@ -320,7 +320,7 @@ const createLead = async (req, res) => {
 
     res.status(201).json(lead);
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -334,11 +334,11 @@ const createLead = async (req, res) => {
 const createPublicLead = async (req, res) => {
   try {
     const { name, phone_number, ...rest } = req.body || {};
-    
+
     if (!phone_number) {
       return res.status(400).json({ message: 'Phone number is compulsory' });
     }
-    
+
     let existingCustomer = await Customer.findOne({ phone_number });
     if (!existingCustomer) {
       existingCustomer = await Customer.create({ name: name || 'Unknown', phone_number });
@@ -352,10 +352,10 @@ const createPublicLead = async (req, res) => {
     const leadCount = await Lead.countDocuments({ customer: customerId });
     const isRepeat = leadCount > 0;
 
-    const payload = { 
-      ...rest, 
-      customer: customerId, 
-      isRepeat 
+    const payload = {
+      ...rest,
+      customer: customerId,
+      isRepeat
     };
 
     if (req.body.assgin) {
@@ -438,8 +438,8 @@ const updateLead = async (req, res) => {
 
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
-      req.user.roles.includes('admin') || 
-      req.user.roles.includes('superadmin') || 
+      req.user.roles.includes('admin') ||
+      req.user.roles.includes('superadmin') ||
       req.user.email === 'superadmin@gmail.com'
     );
 
@@ -470,7 +470,7 @@ const updateLead = async (req, res) => {
 
     res.status(200).json(updated);
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -500,7 +500,7 @@ const deleteLead = async (req, res) => {
 
     res.status(200).json({ message: 'Lead deleted successfully' });
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -512,7 +512,7 @@ const exportLeads = async (req, res) => {
   try {
     const { search = '', assgin, status, reason_call, product, startDate, endDate, age, orderStatus } = req.query;
     const query = { isDeleted: { $ne: true } };
-    
+
     if (search) {
       const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
       const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
@@ -617,11 +617,11 @@ const exportLeads = async (req, res) => {
         }
       }
     }
-    
+
     if (orderStatus !== undefined && orderStatus !== 'all' && orderStatus !== '') {
       query.orderStatus = orderStatus === 'true';
     }
-    
+
     if (startDate || endDate) {
       query.createdAt = {};
       if (startDate) query.createdAt.$gte = new Date(startDate);
@@ -631,14 +631,14 @@ const exportLeads = async (req, res) => {
         query.createdAt.$lte = end;
       }
     }
-    
+
     const leads = await Lead.find(query)
       .populate('assgin', 'name')
       .populate('status', 'name')
       .populate('reason_call', 'name')
       .populate('customer', 'name phone_number')
       .sort({ createdAt: -1 });
-      
+
     const mappedLeads = leads.map(lead => {
       const obj = lead.toObject();
       if (obj.customer) {
@@ -647,10 +647,10 @@ const exportLeads = async (req, res) => {
       }
       return obj;
     });
-      
+
     res.status(200).json(mappedLeads);
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
