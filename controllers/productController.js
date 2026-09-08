@@ -1,5 +1,7 @@
 const Product = require('../models/productModel');
 
+const escapeRegex = (str) => str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
 // @desc    Get all products (with pagination & search)
 // @route   GET /api/products?page=1&limit=10&search=name
 // @access  Public
@@ -11,7 +13,7 @@ const getProducts = async (req, res) => {
     const skip = (page - 1) * limit;
 
     const filter = search
-      ? { name: { $regex: search, $options: 'i' } }
+      ? { name: { $regex: escapeRegex(search), $options: 'i' } }
       : {};
 
     const [products, total] = await Promise.all([
@@ -112,7 +114,7 @@ const deleteProduct = async (req, res) => {
 const exportProducts = async (req, res) => {
   try {
     const search = req.query.search || '';
-    const filter = search ? { name: { $regex: search, $options: 'i' } } : {};
+    const filter = search ? { name: { $regex: escapeRegex(search), $options: 'i' } } : {};
     const products = await Product.find(filter).sort({ createdAt: -1 });
     res.status(200).json(products);
   } catch (error) {

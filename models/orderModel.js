@@ -8,6 +8,15 @@ const orderProductSchema = new mongoose.Schema({
   subtotal: { type: Number }
 }, { _id: false });
 
+const statusHistorySchema = new mongoose.Schema({
+  oldStatus: { type: String },
+  newStatus: { type: String },
+  reason: { type: String, required: true },
+  updatedBy: { type: String },
+  updatedById: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  createdAt: { type: Date, default: Date.now }
+});
+
 const orderSchema = mongoose.Schema({
   leadId: {
     type: mongoose.Schema.Types.ObjectId,
@@ -42,6 +51,14 @@ const orderSchema = mongoose.Schema({
   status: {
     type: String,
     default: 'Dispatched'
+  },
+  statusReason: {
+    type: String,
+    default: ''
+  },
+  statusHistory: {
+    type: [statusHistorySchema],
+    default: []
   },
   isDeleted: { type: Boolean, default: false },
   deleteDate: { type: Date }

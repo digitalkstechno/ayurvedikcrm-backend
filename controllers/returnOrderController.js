@@ -3,6 +3,38 @@ const ReturnOrder = require('../models/returnOrderModel');
 const Order = require('../models/orderModel');
 const User = require('../models/userModel');
 
+const escapeRegex = (str) => str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+const parseProductFilter = (val) => {
+  if (!val || val === 'all' || val === '') return null;
+  const items = val.split(',').map(s => s.trim()).filter(Boolean);
+  if (items.length === 0) return null;
+
+  const objectIds = [];
+  const names = [];
+
+  items.forEach(item => {
+    if (mongoose.Types.ObjectId.isValid(item)) {
+      objectIds.push(new mongoose.Types.ObjectId(item));
+    } else {
+      names.push(item);
+    }
+  });
+
+  const conditions = [];
+  if (objectIds.length > 0) {
+    conditions.push({ 'products.productId': { $in: objectIds } });
+  }
+  if (names.length > 0) {
+    const escapedPattern = names.map(escapeRegex).join('|');
+    conditions.push({ 'products.name': { $regex: escapedPattern, $options: 'i' } });
+  }
+
+  if (conditions.length === 1) return conditions[0];
+  if (conditions.length > 1) return { $or: conditions };
+  return null;
+};
+
 // @desc    Get all return orders
 // @route   GET /api/return-orders
 // @access  Public
@@ -43,7 +75,7 @@ const getReturnOrders = async (req, res) => {
       const productAllQuery = terms.length > 0 ? {
         products: {
           $all: terms.map(term => ({
-            $elemMatch: { name: { $regex: term, $options: 'i' } }
+            $elemMatch: { name: { $regex: escapeRegex(term), $options: 'i' } }
           }))
         }
       } : null;
@@ -84,8 +116,14 @@ const getReturnOrders = async (req, res) => {
     } else {
       query.assginTo = req.user ? req.user._id : null;
     }
-    if (product && product !== 'all' && product !== '') {
-      query['products.productId'] = { $in: product.split(',') };
+    const productCond = parseProductFilter(product);
+    if (productCond) {
+      if (productCond.$or) {
+        query.$and = query.$and || [];
+        query.$and.push(productCond);
+      } else {
+        Object.assign(query, productCond);
+      }
     }
     if (type && type !== 'all' && type !== '') {
       query.type = { $in: type.split(',') };
@@ -504,8 +542,14 @@ const exportReturnOrders = async (req, res) => {
     if (assginTo && assginTo !== 'all' && assginTo !== '') {
       query.assginTo = { $in: assginTo.split(',') };
     }
-    if (product && product !== 'all' && product !== '') {
-      query['products.productId'] = { $in: product.split(',') };
+    const productCond = parseProductFilter(product);
+    if (productCond) {
+      if (productCond.$or) {
+        query.$and = query.$and || [];
+        query.$and.push(productCond);
+      } else {
+        Object.assign(query, productCond);
+      }
     }
     if (type && type !== 'all' && type !== '') {
       query.type = { $in: type.split(',') };

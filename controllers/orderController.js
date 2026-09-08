@@ -4,6 +4,38 @@ const Lead = require('../models/leadModel');
 const ActivityLog = require('../models/activityLogModel');
 const User = require('../models/userModel');
 
+const escapeRegex = (str) => str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+const parseProductFilter = (val) => {
+  if (!val || val === 'all' || val === '') return null;
+  const items = val.split(',').map(s => s.trim()).filter(Boolean);
+  if (items.length === 0) return null;
+
+  const objectIds = [];
+  const names = [];
+
+  items.forEach(item => {
+    if (mongoose.Types.ObjectId.isValid(item)) {
+      objectIds.push(new mongoose.Types.ObjectId(item));
+    } else {
+      names.push(item);
+    }
+  });
+
+  const conditions = [];
+  if (objectIds.length > 0) {
+    conditions.push({ 'products.productId': { $in: objectIds } });
+  }
+  if (names.length > 0) {
+    const escapedPattern = names.map(escapeRegex).join('|');
+    conditions.push({ 'products.name': { $regex: escapedPattern, $options: 'i' } });
+  }
+
+  if (conditions.length === 1) return conditions[0];
+  if (conditions.length > 1) return { $or: conditions };
+  return null;
+};
+
 // @desc    Get all orders
 // @route   GET /api/orders
 // @access  Public
@@ -15,7 +47,7 @@ const getOrders = async (req, res) => {
     };
 
     if (search) {
-      const escapedSearch = search.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+      const escapedSearch = escapeRegex(search);
       const flexibleSearchPattern = escapedSearch.trim().replace(/\s+/g, '[\\s,]*');
 
       const matchedUsers = await User.find({ name: { $regex: flexibleSearchPattern, $options: 'i' } }).select('_id');
@@ -25,7 +57,7 @@ const getOrders = async (req, res) => {
       const productAllQuery = terms.length > 0 ? {
         products: {
           $all: terms.map(term => ({
-            $elemMatch: { name: { $regex: term, $options: 'i' } }
+            $elemMatch: { name: { $regex: escapeRegex(term), $options: 'i' } }
           }))
         }
       } : null;
@@ -78,8 +110,14 @@ const getOrders = async (req, res) => {
       const courierRegexes = courier.split(',').map(c => new RegExp(`^${c.trim()}$`, 'i'));
       query.courier = { $in: courierRegexes };
     }
-    if (product && product !== 'all' && product !== '') {
-      query['products.name'] = { $regex: product.split(',').map(p => p.trim()).join('|'), $options: 'i' };
+    const productCond = parseProductFilter(product);
+    if (productCond) {
+      if (productCond.$or) {
+        query.$and = query.$and || [];
+        query.$and.push(productCond);
+      } else {
+        Object.assign(query, productCond);
+      }
     }
 
     if (startDate || endDate) {
@@ -224,19 +262,44 @@ const updateOrder = async (req, res) => {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ message: 'Order not found' });
 
-    const statusChanged = req.body.status && req.body.status.toString() !== (order.status ? order.status.toString() : '');
+    const oldStatusVal = order.status || 'IN TRANSIT';
+    const statusChanged = req.body.status && req.body.status.toString() !== oldStatusVal.toString();
+
+    if (req.body.statusReason) {
+      const historyList = Array.isArray(order.statusHistory) ? order.statusHistory : [];
+      historyList.push({
+        oldStatus: oldStatusVal,
+        newStatus: req.body.status || oldStatusVal,
+        reason: req.body.statusReason,
+        updatedBy: req.user ? (req.user.name || req.user.email) : 'User',
+        updatedById: req.user ? req.user._id : null,
+        createdAt: new Date()
+      });
+      req.body.statusHistory = historyList;
+    }
 
     const updated = await Order.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
       runValidators: true
     });
 
+    if (updated.leadId && req.body.statusReason) {
+      await Lead.findByIdAndUpdate(updated.leadId, {
+        remark: req.body.statusReason,
+        note: req.body.statusReason
+      });
+    }
+
     if (req.user) {
+      const logMessage = statusChanged
+        ? (req.body.statusReason ? `Delivery Status changed to ${req.body.status}. Reason: ${req.body.statusReason}` : `Delivery status updated to ${req.body.status}`)
+        : 'Order updated successfully';
+
       await ActivityLog.create({
         user: req.user._id,
         lead: updated.leadId || null,
         action: statusChanged ? 'Status Change' : 'Update',
-        message: statusChanged ? 'Lead Status Two Change successfully' : 'Order updated successfully'
+        message: logMessage
       });
     }
 
@@ -295,7 +358,7 @@ const exportOrders = async (req, res) => {
       const productAllQuery = terms.length > 0 ? {
         products: {
           $all: terms.map(term => ({
-            $elemMatch: { name: { $regex: term, $options: 'i' } }
+            $elemMatch: { name: { $regex: escapeRegex(term), $options: 'i' } }
           }))
         }
       } : null;
@@ -348,8 +411,14 @@ const exportOrders = async (req, res) => {
       const courierRegexes = courier.split(',').map(c => new RegExp(`^${c.trim()}$`, 'i'));
       query.courier = { $in: courierRegexes };
     }
-    if (product && product !== 'all' && product !== '') {
-      query['products.name'] = { $regex: product.split(',').map(p => p.trim()).join('|'), $options: 'i' };
+    const productCond = parseProductFilter(product);
+    if (productCond) {
+      if (productCond.$or) {
+        query.$and = query.$and || [];
+        query.$and.push(productCond);
+      } else {
+        Object.assign(query, productCond);
+      }
     }
 
     if (startDate || endDate) {
