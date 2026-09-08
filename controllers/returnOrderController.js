@@ -3,6 +3,36 @@ const ReturnOrder = require('../models/returnOrderModel');
 const Order = require('../models/orderModel');
 const User = require('../models/userModel');
 
+const checkUserReportAccess = async (user) => {
+  if (!user) return { isGlobal: false, isOwn: false };
+  const isAdmin = (user.roles && (user.roles.includes('admin') || user.roles.includes('superadmin'))) || user.email === 'superadmin@gmail.com';
+  if (isAdmin) return { isGlobal: true, isOwn: false };
+
+  const Role = mongoose.model('Role');
+  const roleDocs = await Role.find({ name: { $in: user.roles || [] } });
+  let permissions = {};
+  roleDocs.forEach(r => {
+    if (r.permissions) permissions = { ...permissions, ...r.permissions };
+  });
+
+  const hasOwn = !!(permissions['Return-order-report-view-own'] || permissions['RETURN-ORDER-REPORT-VIEW-OWN']);
+  const hasGlobal = !!(permissions['Return-order-report-view-global'] || permissions['RETURN-ORDER-REPORT-VIEW-GLOBAL']);
+
+  if (hasOwn && !hasGlobal) {
+    return { isGlobal: false, isOwn: true };
+  }
+  if (hasGlobal) {
+    return { isGlobal: true, isOwn: false };
+  }
+
+  const hasLegacyView = !!(permissions['Return-order-report-view'] || permissions['RETURN-ORDER-REPORT-VIEW']);
+  if (hasLegacyView) {
+    return { isGlobal: true, isOwn: false };
+  }
+
+  return { isGlobal: false, isOwn: false };
+};
+
 // @desc    Get all return orders
 // @route   GET /api/return-orders
 // @access  Public
@@ -74,8 +104,8 @@ const getReturnOrders = async (req, res) => {
     }
     // Check if current user is admin/superadmin
     const isAdmin = req.user && (
-      req.user.roles.includes('admin') || 
-      req.user.roles.includes('superadmin') || 
+      req.user.roles.includes('admin') ||
+      req.user.roles.includes('superadmin') ||
       req.user.email === 'superadmin@gmail.com'
     );
 
@@ -129,7 +159,7 @@ const getReturnOrders = async (req, res) => {
       totalPages: Math.ceil(count / limit)
     });
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -145,7 +175,7 @@ const createReturnOrder = async (req, res) => {
     const returnOrder = await ReturnOrder.create(req.body);
     res.status(201).json(returnOrder);
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -167,7 +197,7 @@ const updateReturnOrder = async (req, res) => {
     });
     res.status(200).json(updated);
   } catch (error) {
-        if (error.code === 11000) {
+    if (error.code === 11000) {
       const field = Object.keys(error.keyValue)[0];
       return res.status(400).json({ message: `A record with this ${field} already exists.` });
     }
@@ -224,6 +254,8 @@ const getStaffReturnStats = async (req, res) => {
     const User = require('../models/userModel');
     const Order = require('../models/orderModel');
 
+    const { isOwn } = await checkUserReportAccess(req.user);
+
     const dateMatch = { isDeleted: { $ne: true } };
     if (startDate || endDate) {
       dateMatch.createdAt = {};
@@ -236,7 +268,9 @@ const getStaffReturnStats = async (req, res) => {
     }
 
     let userQuery = { isDeleted: { $ne: true } };
-    if (assginTo && assginTo !== 'all') {
+    if (isOwn && req.user) {
+      userQuery._id = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
       const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
       const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
       userQuery._id = { $in: objectIds };
@@ -244,9 +278,21 @@ const getStaffReturnStats = async (req, res) => {
 
     const users = await User.find(userQuery).select('_id name');
 
+    const orderMatch = { ...dateMatch };
+    const returnOrderMatch = { ...dateMatch };
+    if (isOwn && req.user) {
+      orderMatch.assginTo = req.user._id;
+      returnOrderMatch.assginTo = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
+      const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
+      const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+      orderMatch.assginTo = { $in: objectIds };
+      returnOrderMatch.assginTo = { $in: objectIds };
+    }
+
     // Aggregate Orders grouped by assginTo
     const orderStats = await Order.aggregate([
-      { $match: dateMatch },
+      { $match: orderMatch },
       {
         $group: {
           _id: "$assginTo",
@@ -259,13 +305,56 @@ const getStaffReturnStats = async (req, res) => {
                 0
               ]
             }
+          },
+          serumBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /serum/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          oilBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /oil/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
           }
         }
       }
     ]);
 
     // Aggregate Return Orders grouped by assginTo and product keywords
-    const returnOrderMatch = { ...dateMatch };
     if (product && product !== 'all') {
       const ids = product.split(',').map(id => id.trim()).filter(Boolean);
       const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
@@ -342,18 +431,21 @@ const getStaffReturnStats = async (req, res) => {
     // Map each staff member with data
     users.forEach((user) => {
       const uId = user._id.toString();
-      const oData = orderMap[uId] || { booked: 0, delivered: 0 };
+      const oData = orderMap[uId] || { booked: 0, delivered: 0, serumBooked: 0, oilBooked: 0 };
       const rData = returnMap[uId] || { returns: 0, serumReturns: 0, oilReturns: 0, latestDate: null };
 
-      if (oData.booked > 0 || rData.returns > 0) {
+      if (oData.delivered > 0 || rData.returns > 0) {
         const booked = oData.booked || (rData.returns > 0 ? rData.returns : 0);
-        const delivered = oData.delivered > 0 ? oData.delivered : Math.max(booked - rData.returns, 0);
+        const delivered = oData.delivered || 0;
         const returns = rData.returns || 0;
         const deliveryRateNum = booked > 0 ? Math.round((delivered / booked) * 100 * 100) / 100 : 0;
         const serumReturnsCount = rData.serumReturns || 0;
         const oilReturnsCount = rData.oilReturns || 0;
-        const serumRate = booked > 0 ? Math.round((serumReturnsCount / booked) * 100) : (serumReturnsCount > 0 ? 100 : 0);
-        const oilRate = booked > 0 ? Math.round((oilReturnsCount / booked) * 100) : (oilReturnsCount > 0 ? 100 : 0);
+        const serumBookedCount = oData.serumBooked || (serumReturnsCount > 0 ? serumReturnsCount : 0);
+        const oilBookedCount = oData.oilBooked || (oilReturnsCount > 0 ? oilReturnsCount : 0);
+
+        const serumRate = serumBookedCount > 0 ? Math.round((serumReturnsCount / serumBookedCount) * 100) : (serumReturnsCount > 0 ? 100 : 0);
+        const oilRate = oilBookedCount > 0 ? Math.round((oilReturnsCount / oilBookedCount) * 100) : (oilReturnsCount > 0 ? 100 : 0);
 
         rawStats.push({
           id: user._id,
@@ -553,9 +645,12 @@ const exportReturnOrders = async (req, res) => {
 const getReturnOrderSummaryStats = async (req, res) => {
   try {
     const { startDate, endDate, assginTo, product } = req.query;
+    const { isOwn } = await checkUserReportAccess(req.user);
 
     const baseQuery = { isDeleted: { $ne: true } };
-    if (assginTo && assginTo !== 'all') {
+    if (isOwn && req.user) {
+      baseQuery.assginTo = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
       const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
       const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
       baseQuery.assginTo = { $in: objectIds };
@@ -628,7 +723,7 @@ const getReturnOrderSummaryStats = async (req, res) => {
 
     // Product Return Rates calculation
     const returnProductMatch = { ...baseQuery };
-    const orderProductMatch = { isDeleted: { $ne: true } };
+    const orderProductMatch = { ...baseQuery };
 
     if (dateFilter) {
       returnProductMatch.createdAt = dateFilter;
@@ -667,6 +762,22 @@ const getReturnOrderSummaryStats = async (req, res) => {
     let serumReturns = 0, serumOrders = 0;
     let oilReturns = 0, oilOrders = 0;
 
+    orderProductStats.forEach(item => {
+      if (item._id) {
+        const key = item._id.trim();
+        if (key.includes('serum')) serumOrders += item.totalOrders;
+        if (key.includes('oil')) oilOrders += item.totalOrders;
+      }
+    });
+
+    returnProductStats.forEach(item => {
+      if (item._id) {
+        const key = item._id.trim();
+        if (key.includes('serum')) serumReturns += item.totalReturns;
+        if (key.includes('oil')) oilReturns += item.totalReturns;
+      }
+    });
+
     const productReturnRates = returnProductStats
       .filter(item => item._id)
       .map(item => {
@@ -675,15 +786,6 @@ const getReturnOrderSummaryStats = async (req, res) => {
         const returned = item.totalReturns;
         const total = orderMap[key] ? orderMap[key].totalOrders : returned;
         const rate = total > 0 ? Math.round((returned / total) * 100) : 0;
-
-        if (key.includes('serum')) {
-          serumReturns += returned;
-          serumOrders += total;
-        }
-        if (key.includes('oil')) {
-          oilReturns += returned;
-          oilOrders += total;
-        }
 
         return {
           productName: rawName.toLowerCase().endsWith('return rate') ? rawName : `${rawName} Return Rate`,
@@ -697,10 +799,23 @@ const getReturnOrderSummaryStats = async (req, res) => {
       })
       .sort((a, b) => b.rate - a.rate);
 
-    const serumRateVal = serumOrders > 0 ? Math.round((serumReturns / serumOrders) * 100) : (serumReturns > 0 ? 100 : 0);
-    const oilRateVal = oilOrders > 0 ? Math.round((oilReturns / oilOrders) * 100) : (oilReturns > 0 ? 100 : 0);
+    let serumRateVal = 0;
+    if (serumOrders > 0) {
+      const calc = (serumReturns / serumOrders) * 100;
+      serumRateVal = calc > 0 && calc < 1 ? Math.round(calc * 100) / 100 : Math.round(calc);
+    } else if (serumReturns > 0) {
+      serumRateVal = 100;
+    }
 
-    const serumCategoryCard = {
+    let oilRateVal = 0;
+    if (oilOrders > 0) {
+      const calc = (oilReturns / oilOrders) * 100;
+      oilRateVal = calc > 0 && calc < 1 ? Math.round(calc * 100) / 100 : Math.round(calc);
+    } else if (oilReturns > 0) {
+      oilRateVal = 100;
+    }
+
+    const serumCard = {
       productName: "Serum Return Rate",
       rawProductName: "Serum",
       rate: serumRateVal,
@@ -708,7 +823,7 @@ const getReturnOrderSummaryStats = async (req, res) => {
       status: serumRateVal >= 15 ? "high" : "low"
     };
 
-    const oilCategoryCard = {
+    const oilCard = {
       productName: "Oil Return Rate",
       rawProductName: "Oil",
       rate: oilRateVal,
@@ -716,21 +831,11 @@ const getReturnOrderSummaryStats = async (req, res) => {
       status: oilRateVal >= 15 ? "high" : "low"
     };
 
-    const serumCardFound = productReturnRates.find(p => p.rawProductName.toLowerCase().includes('serum'));
-    const serumCard = {
-      ...(serumCardFound || serumCategoryCard),
-      productName: "Serum Return Rate"
-    };
-
-    const oilCardFound = productReturnRates.find(p => p.rawProductName.toLowerCase().includes('oil'));
-    const oilCard = {
-      ...(oilCardFound || oilCategoryCard),
-      productName: "Oil Return Rate"
-    };
-
     // 4. Performance Trend (Last 6 Weeks calculation)
     const orderBaseMatch = { isDeleted: { $ne: true } };
-    if (assginTo && assginTo !== 'all') {
+    if (isOwn && req.user) {
+      orderBaseMatch.assginTo = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
       const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
       const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
       orderBaseMatch.assginTo = { $in: objectIds };
@@ -751,8 +856,9 @@ const getReturnOrderSummaryStats = async (req, res) => {
       wEnd.setDate(now.getDate() - i * 7);
       wEnd.setHours(23, 59, 59, 999);
 
-      const wTotalOrders = await Order.countDocuments({
+      const wTotalOrdersCount = await Order.countDocuments({
         ...orderBaseMatch,
+        status: { $not: { $regex: /dispatched/i } },
         createdAt: { $gte: wStart, $lte: wEnd }
       });
 
@@ -767,11 +873,16 @@ const getReturnOrderSummaryStats = async (req, res) => {
         createdAt: { $gte: wStart, $lte: wEnd }
       });
 
+      const wTotalOrders = Math.max(wTotalOrdersCount, wDeliveredOrders + wReturnOrders);
+
       let delRate = 0;
       let retRate = 0;
       if (wTotalOrders > 0) {
-        delRate = Math.round((wDeliveredOrders / wTotalOrders) * 100);
-        retRate = Math.round((wReturnOrders / wTotalOrders) * 100);
+        const dCalc = (wDeliveredOrders / wTotalOrders) * 100;
+        delRate = dCalc > 0 && dCalc < 1 ? Math.round(dCalc * 100) / 100 : Math.round(dCalc * 10) / 10;
+
+        const rCalc = (wReturnOrders / wTotalOrders) * 100;
+        retRate = rCalc > 0 && rCalc < 1 ? Math.round(rCalc * 100) / 100 : Math.round(rCalc * 10) / 10;
       } else if (wReturnOrders > 0) {
         retRate = 100;
         delRate = 0;
@@ -791,7 +902,10 @@ const getReturnOrderSummaryStats = async (req, res) => {
       weeksTrend.push({
         period: labelName,
         deliveredRate: delRate,
-        returnRate: retRate
+        returnRate: retRate,
+        deliveredCount: wDeliveredOrders,
+        returnCount: wReturnOrders,
+        totalOrders: wTotalOrders
       });
     }
 
@@ -845,9 +959,12 @@ const exportStaffReturnStats = async (req, res) => {
     const { startDate, endDate, search = '', assginTo, product } = req.query;
     const User = require('../models/userModel');
     const Order = require('../models/orderModel');
+    const { isOwn } = await checkUserReportAccess(req.user);
 
     const baseQuery = { isDeleted: { $ne: true } };
-    if (assginTo && assginTo !== 'all') {
+    if (isOwn && req.user) {
+      baseQuery.assginTo = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
       const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
       const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
       baseQuery.assginTo = { $in: objectIds };
@@ -920,7 +1037,7 @@ const exportStaffReturnStats = async (req, res) => {
 
     // Product Return Rates calculation
     const returnProductMatch = { ...baseQuery };
-    const orderProductMatch = { isDeleted: { $ne: true } };
+    const orderProductMatch = { ...baseQuery };
 
     if (dateFilter) {
       returnProductMatch.createdAt = dateFilter;
@@ -959,6 +1076,22 @@ const exportStaffReturnStats = async (req, res) => {
     let serumReturns = 0, serumOrders = 0;
     let oilReturns = 0, oilOrders = 0;
 
+    orderProductStats.forEach(item => {
+      if (item._id) {
+        const key = item._id.trim();
+        if (key.includes('serum')) serumOrders += item.totalOrders;
+        if (key.includes('oil')) oilOrders += item.totalOrders;
+      }
+    });
+
+    returnProductStats.forEach(item => {
+      if (item._id) {
+        const key = item._id.trim();
+        if (key.includes('serum')) serumReturns += item.totalReturns;
+        if (key.includes('oil')) oilReturns += item.totalReturns;
+      }
+    });
+
     const productReturnRates = returnProductStats
       .filter(item => item._id)
       .map(item => {
@@ -967,15 +1100,6 @@ const exportStaffReturnStats = async (req, res) => {
         const returned = item.totalReturns;
         const total = orderProdMap[key] ? orderProdMap[key].totalOrders : returned;
         const rate = total > 0 ? Math.round((returned / total) * 100) : 0;
-
-        if (key.includes('serum')) {
-          serumReturns += returned;
-          serumOrders += total;
-        }
-        if (key.includes('oil')) {
-          oilReturns += returned;
-          oilOrders += total;
-        }
 
         return {
           productName: rawName.toLowerCase().endsWith('return rate') ? rawName : `${rawName} Return Rate`,
@@ -987,11 +1111,24 @@ const exportStaffReturnStats = async (req, res) => {
       })
       .sort((a, b) => b.rate - a.rate);
 
-    const serumRateVal = serumOrders > 0 ? Math.round((serumReturns / serumOrders) * 100) : (serumReturns > 0 ? 100 : 0);
-    const oilRateVal = oilOrders > 0 ? Math.round((oilReturns / oilOrders) * 100) : (oilReturns > 0 ? 100 : 0);
+    let prod1RateVal = 0;
+    if (serumOrders > 0) {
+      const calc = (serumReturns / serumOrders) * 100;
+      prod1RateVal = calc > 0 && calc < 1 ? Math.round(calc * 100) / 100 : Math.round(calc);
+    } else if (serumReturns > 0) {
+      prod1RateVal = 100;
+    }
 
-    const prod1Card = { productName: "Serum Return Rate", formattedRate: `${serumRateVal}%`, status: serumRateVal >= 15 ? 'high' : 'low' };
-    const prod2Card = { productName: "Oil Return Rate", formattedRate: `${oilRateVal}%`, status: oilRateVal >= 15 ? 'high' : 'low' };
+    let prod2RateVal = 0;
+    if (oilOrders > 0) {
+      const calc = (oilReturns / oilOrders) * 100;
+      prod2RateVal = calc > 0 && calc < 1 ? Math.round(calc * 100) / 100 : Math.round(calc);
+    } else if (oilReturns > 0) {
+      prod2RateVal = 100;
+    }
+
+    const prod1Card = { productName: "Serum Return Rate", formattedRate: `${prod1RateVal}%`, status: prod1RateVal >= 15 ? 'high' : 'low' };
+    const prod2Card = { productName: "Oil Return Rate", formattedRate: `${prod2RateVal}%`, status: prod2RateVal >= 15 ? 'high' : 'low' };
 
     // 2. Fetch Staff Return Stats Table Data
     const dateMatch = { isDeleted: { $ne: true } };
@@ -1000,7 +1137,9 @@ const exportStaffReturnStats = async (req, res) => {
     }
 
     let userQuery = { isDeleted: { $ne: true } };
-    if (assginTo && assginTo !== 'all') {
+    if (isOwn && req.user) {
+      userQuery._id = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
       const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
       const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
       userQuery._id = { $in: objectIds };
@@ -1008,8 +1147,20 @@ const exportStaffReturnStats = async (req, res) => {
 
     const users = await User.find(userQuery).select('_id name');
 
+    const orderMatch = { ...dateMatch };
+    const returnOrderMatch = { ...dateMatch };
+    if (isOwn && req.user) {
+      orderMatch.assginTo = req.user._id;
+      returnOrderMatch.assginTo = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
+      const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
+      const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+      orderMatch.assginTo = { $in: objectIds };
+      returnOrderMatch.assginTo = { $in: objectIds };
+    }
+
     const orderStats = await Order.aggregate([
-      { $match: dateMatch },
+      { $match: orderMatch },
       {
         $group: {
           _id: "$assginTo",
@@ -1022,12 +1173,55 @@ const exportStaffReturnStats = async (req, res) => {
                 0
               ]
             }
+          },
+          serumBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /serum/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          oilBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /oil/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
           }
         }
       }
     ]);
 
-    const returnOrderMatch = { ...dateMatch };
     if (product && product !== 'all') {
       const ids = product.split(',').map(id => id.trim()).filter(Boolean);
       const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
@@ -1103,18 +1297,21 @@ const exportStaffReturnStats = async (req, res) => {
 
     users.forEach((user) => {
       const uId = user._id.toString();
-      const oData = orderMap[uId] || { booked: 0, delivered: 0 };
+      const oData = orderMap[uId] || { booked: 0, delivered: 0, serumBooked: 0, oilBooked: 0 };
       const rData = returnMap[uId] || { returns: 0, serumReturns: 0, oilReturns: 0, latestDate: null };
 
-      if (oData.booked > 0 || rData.returns > 0) {
+      if (oData.delivered > 0 || rData.returns > 0) {
         const booked = oData.booked || (rData.returns > 0 ? rData.returns : 0);
-        const delivered = oData.delivered > 0 ? oData.delivered : Math.max(booked - rData.returns, 0);
+        const delivered = oData.delivered || 0;
         const returns = rData.returns || 0;
         const deliveryRateNum = booked > 0 ? Math.round((delivered / booked) * 100 * 100) / 100 : 0;
         const serumReturnsCount = rData.serumReturns || 0;
         const oilReturnsCount = rData.oilReturns || 0;
-        const serumRate = booked > 0 ? Math.round((serumReturnsCount / booked) * 100) : (serumReturnsCount > 0 ? 100 : 0);
-        const oilRate = booked > 0 ? Math.round((oilReturnsCount / booked) * 100) : (oilReturnsCount > 0 ? 100 : 0);
+        const serumBookedCount = oData.serumBooked || (serumReturnsCount > 0 ? serumReturnsCount : 0);
+        const oilBookedCount = oData.oilBooked || (oilReturnsCount > 0 ? oilReturnsCount : 0);
+
+        const serumRate = serumBookedCount > 0 ? Math.round((serumReturnsCount / serumBookedCount) * 100) : (serumReturnsCount > 0 ? 100 : 0);
+        const oilRate = oilBookedCount > 0 ? Math.round((oilReturnsCount / oilBookedCount) * 100) : (oilReturnsCount > 0 ? 100 : 0);
 
         rawStats.push({
           id: user._id,
@@ -1170,121 +1367,16 @@ const exportStaffReturnStats = async (req, res) => {
       ? statsWithRank.filter(s => s.name.toLowerCase().includes(search.toLowerCase()))
       : statsWithRank;
 
-    // 3. Build Excel Workbook
-    const ExcelJS = require('exceljs');
-    const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Staff Return Report');
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=staff_return_report_${Date.now()}.csv`);
 
-    // Title Row
-    worksheet.mergeCells('A1:K1');
-    const titleCell = worksheet.getCell('A1');
-    titleCell.value = 'RETURN ORDER REPORT SUMMARY';
-    titleCell.font = { bold: true, color: { argb: 'FFFFFF' }, size: 12 };
-    titleCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0F5257' } };
-    titleCell.alignment = { vertical: 'middle', horizontal: 'center' };
-    worksheet.getRow(1).height = 28;
-
-    // Summary Stat Cards (Rows 3 & 4)
-    worksheet.getCell('A3').value = "Today's Returns";
-    worksheet.getCell('A4').value = `${todayCount} orders`;
-
-    worksheet.getCell('D3').value = "Weekly Progress";
-    worksheet.getCell('D4').value = `${thisWeekCount} orders`;
-
-    worksheet.getCell('G3').value = prod1Card.productName;
-    worksheet.getCell('G4').value = prod1Card.formattedRate;
-
-    worksheet.getCell('J3').value = prod2Card.productName;
-    worksheet.getCell('J4').value = prod2Card.formattedRate;
-
-    worksheet.mergeCells('A3:C3');
-    worksheet.mergeCells('A4:C4');
-    worksheet.mergeCells('D3:F3');
-    worksheet.mergeCells('D4:F4');
-    worksheet.mergeCells('G3:I3');
-    worksheet.mergeCells('G4:I4');
-    worksheet.mergeCells('J3:K3');
-    worksheet.mergeCells('J4:K4');
-
-    const cardStyles = [
-      { top: 'A3', bottom: 'A4', bg: 'E6F4EA', fg: '137333' },
-      { top: 'D3', bottom: 'D4', bg: 'E8F0FE', fg: '1A73E8' },
-      { top: 'G3', bottom: 'G4', bg: 'FCE8E6', fg: 'C5221F' },
-      { top: 'J3', bottom: 'J4', bg: 'FEF7E0', fg: 'B06000' }
-    ];
-
-    cardStyles.forEach(card => {
-      const topCell = worksheet.getCell(card.top);
-      topCell.font = { bold: true, size: 9, color: { argb: '5F6368' } };
-      topCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.bg } };
-      topCell.alignment = { vertical: 'middle', horizontal: 'center' };
-
-      const bottomCell = worksheet.getCell(card.bottom);
-      bottomCell.font = { bold: true, size: 10, color: { argb: card.fg } };
-      bottomCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: card.bg } };
-      bottomCell.alignment = { vertical: 'middle', horizontal: 'center' };
-    });
-
-    worksheet.getRow(3).height = 18;
-    worksheet.getRow(4).height = 22;
-
-    // Table Headers (Row 6)
-    const tableHeaderRow = worksheet.getRow(6);
-    tableHeaderRow.values = [
-      'Rank', 'Staff Name', 'Booked', 'Delivered', 'Returns', 'Delivery %', 'Delivery Trend', 'Serum Returns', 'Serum Status', 'Oil Returns', 'Oil Status'
-    ];
-    tableHeaderRow.font = { bold: true, color: { argb: 'FFFFFF' }, size: 11 };
-    tableHeaderRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '0F5257' } };
-    tableHeaderRow.alignment = { vertical: 'middle', horizontal: 'center' };
-    tableHeaderRow.height = 26;
-
-    worksheet.getColumn(1).width = 8;
-    worksheet.getColumn(2).width = 25;
-    worksheet.getColumn(3).width = 12;
-    worksheet.getColumn(4).width = 12;
-    worksheet.getColumn(5).width = 12;
-    worksheet.getColumn(6).width = 16;
-    worksheet.getColumn(7).width = 16;
-    worksheet.getColumn(8).width = 16;
-    worksheet.getColumn(9).width = 14;
-    worksheet.getColumn(10).width = 16;
-    worksheet.getColumn(11).width = 14;
-
+    let csvContent = 'Rank,Staff Name,Booked,Delivered,Returns,Delivery %,Serum Returns,Oil Returns\n';
     filteredStats.forEach((r) => {
-      const row = worksheet.addRow([
-        r.rank,
-        r.name,
-        r.booked,
-        r.delivered,
-        r.returns,
-        r.deliveryPercentage,
-        r.deliveryTrend,
-        r.serumReturnsCount,
-        r.serumStatus === 'high' ? 'High' : 'Low',
-        r.oilReturnsCount,
-        r.oilStatus === 'high' ? 'High' : 'Low'
-      ]);
-
-      row.height = 22;
-      row.alignment = { vertical: 'middle' };
-
-      for (let c = 1; c <= 11; c++) {
-        const cell = row.getCell(c);
-        if (c !== 2) cell.alignment = { vertical: 'middle', horizontal: 'center' };
-        cell.border = {
-          top: { style: 'thin', color: { argb: 'E5E7EB' } },
-          left: { style: 'thin', color: { argb: 'E5E7EB' } },
-          bottom: { style: 'thin', color: { argb: 'E5E7EB' } },
-          right: { style: 'thin', color: { argb: 'E5E7EB' } }
-        };
-      }
+      const nameEscaped = `"${(r.name || '').replace(/"/g, '""')}"`;
+      csvContent += `${r.rank},${nameEscaped},${r.booked || 0},${r.delivered || 0},${r.returns || 0},"${r.deliveryPercentage || '0%'}",${r.serumRate || 0}%,${r.oilRate || 0}%\n`;
     });
 
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename=staff_return_report_${Date.now()}.xlsx`);
-
-    await workbook.xlsx.write(res);
-    res.end();
+    res.status(200).send(csvContent);
   } catch (error) {
     console.error('Export Staff Return Stats Error:', error);
     res.status(500).json({ message: error.message });

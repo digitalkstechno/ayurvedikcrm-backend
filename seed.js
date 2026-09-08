@@ -39,7 +39,7 @@ const seedDB = async () => {
       "Reminder-edit": true, "Reminder-list": true,
       "Kanban-view": true, "Kanban-update": true,
       "Return-order-list": true, "Return-order-add": true,
-      "Return-order-report-view": true,
+      "Return-order-report-view-own": true, "Return-order-report-view-global": true,
       "Currier-add": true, "Currier-list": true, "Currier-edit": true, "Currier-delete": true,
       "Status-add": true, "Status-list": true, "Status-edit": true, "Status-delete": true,
       "Product-add": true, "Product-list": true, "Product-edit": true, "Product-delete": true,
