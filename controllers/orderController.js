@@ -99,14 +99,27 @@ const getOrders = async (req, res) => {
       .skip((page - 1) * limit)
       .sort({ createdAt: -1 });
 
-    const count = await Order.countDocuments(query);
+    const statsQuery = { ...query };
+    delete statsQuery.status;
+
+    const [count, deliveredCount, rtoCount, inTransitCount] = await Promise.all([
+      Order.countDocuments(query),
+      Order.countDocuments({ ...statsQuery, status: { $regex: /^delivered$/i } }),
+      Order.countDocuments({ ...statsQuery, status: { $regex: /^rto$/i } }),
+      Order.countDocuments({ ...statsQuery, status: { $regex: /^(in transit|dispatched|processing|converted)$/i } })
+    ]);
 
     res.status(200).json({
       data: orders,
       total: count,
       page: Number(page),
       limit: Number(limit),
-      totalPages: Math.ceil(count / limit)
+      totalPages: Math.ceil(count / limit),
+      stats: {
+        delivered: deliveredCount,
+        rto: rtoCount,
+        inTransit: inTransitCount
+      }
     });
   } catch (error) {
         if (error.code === 11000) {
