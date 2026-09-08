@@ -31,20 +31,21 @@ const seedDB = async () => {
       "Dashboard-view": true,
       "User-add": true, "User-list": true, "User-edit": true, "User-delete": true,
       "Team-add": true, "Team-list": true, "Team-edit": true, "Team-delete": true,
-      "Roles-add": true, "Roles-list": true, "Roles-edit": true, "Roles-delete": true,
-      "Lead-add": true, "Lead-transfer": true, "Lead-list": true, "Lead-edit": true, "Lead-delete": true,
+      "Roles-add": true, "Roles-list": true, "Roles-edit": true, "Roles-delete": true, "Roles-export": true,
+      "Lead-add": true, "Lead-transfer": true, "Lead-list": true, "Lead-edit": true, "Lead-delete": true, "Lead-export": true,
       "Restore-lead-list": true, "Restore-lead-action": true,
-      "Order-edit": true, "Order-delete": true, "Repart-order": true,
+      "Order-edit": true, "Order-delete": true, "Repart-order": true, "Order-export": true,
+      "Delivery-list": true, "Delivery-edit": true, "Delivery-delete": true, "Delivery-export": true, "Delivery-full-access": true,
       "Activity-log": true, "Lead-try": true,
       "Reminder-edit": true, "Reminder-list": true,
       "Kanban-view": true, "Kanban-update": true,
       "Return-order-list": true, "Return-order-add": true,
       "Return-order-report-view-own": true, "Return-order-report-view-global": true,
       "Currier-add": true, "Currier-list": true, "Currier-edit": true, "Currier-delete": true,
-      "Status-add": true, "Status-list": true, "Status-edit": true, "Status-delete": true,
-      "Product-add": true, "Product-list": true, "Product-edit": true, "Product-delete": true,
+      "Status-add": true, "Status-list": true, "Status-edit": true, "Status-delete": true, "Status-export": true,
+      "Product-add": true, "Product-list": true, "Product-edit": true, "Product-delete": true, "Product-export": true,
       "Return-order-type-add": true, "Return-order-type-list": true, "Return-order-type-edit": true, "Return-order-type-delete": true,
-      "Reason-to-call-add": true, "Reason-to-call-list": true, "Reason-to-call-edit": true, "Reason-to-call-delete": true
+      "Reason-to-call-add": true, "Reason-to-call-list": true, "Reason-to-call-edit": true, "Reason-to-call-delete": true, "Reason-to-call-export": true
     };
 
     const roles = await Role.create([

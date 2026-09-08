@@ -7,6 +7,38 @@ const User = require('../models/userModel');
 const Status = require('../models/statusModel');
 const ReasonToCall = require('../models/reasonToCallModel');
 
+const escapeRegex = (str) => str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+
+const parseProductFilter = (val) => {
+  if (!val || val === 'all' || val === '') return null;
+  const items = val.split(',').map(s => s.trim()).filter(Boolean);
+  if (items.length === 0) return null;
+
+  const objectIds = [];
+  const names = [];
+
+  items.forEach(item => {
+    if (mongoose.Types.ObjectId.isValid(item)) {
+      objectIds.push(new mongoose.Types.ObjectId(item));
+    } else {
+      names.push(item);
+    }
+  });
+
+  const conditions = [];
+  if (objectIds.length > 0) {
+    conditions.push({ 'products.productId': { $in: objectIds } });
+  }
+  if (names.length > 0) {
+    const escapedPattern = names.map(escapeRegex).join('|');
+    conditions.push({ 'products.name': { $regex: escapedPattern, $options: 'i' } });
+  }
+
+  if (conditions.length === 1) return conditions[0];
+  if (conditions.length > 1) return { $or: conditions };
+  return null;
+};
+
 // @desc    Get all leads
 // @route   GET /api/leads
 // @access  Public
@@ -58,7 +90,7 @@ const getLeads = async (req, res) => {
       const productAllQuery = terms.length > 0 ? {
         products: {
           $all: terms.map(term => ({
-            $elemMatch: { name: { $regex: term, $options: 'i' } }
+            $elemMatch: { name: { $regex: escapeRegex(term), $options: 'i' } }
           }))
         }
       } : null;
@@ -117,8 +149,15 @@ const getLeads = async (req, res) => {
     const reasonFilter = parseObjectIdFilter(reason_call);
     if (reasonFilter) query.reason_call = reasonFilter;
 
-    const productFilter = parseObjectIdFilter(product);
-    if (productFilter) query['products.productId'] = productFilter;
+    const productCond = parseProductFilter(product);
+    if (productCond) {
+      if (productCond.$or) {
+        query.$and = query.$and || [];
+        query.$and.push(productCond);
+      } else {
+        Object.assign(query, productCond);
+      }
+    }
 
     if (isAdmin) {
       const assignFilter = parseObjectIdFilter(assgin);
@@ -597,8 +636,15 @@ const exportLeads = async (req, res) => {
     const reasonFilter = parseObjectIdFilter(reason_call);
     if (reasonFilter) query.reason_call = reasonFilter;
 
-    const productFilter = parseObjectIdFilter(product);
-    if (productFilter) query['products.productId'] = productFilter;
+    const productCond = parseProductFilter(product);
+    if (productCond) {
+      if (productCond.$or) {
+        query.$and = query.$and || [];
+        query.$and.push(productCond);
+      } else {
+        Object.assign(query, productCond);
+      }
+    }
 
     const assignFilter = parseObjectIdFilter(assgin);
     if (assignFilter) query.assgin = assignFilter;
