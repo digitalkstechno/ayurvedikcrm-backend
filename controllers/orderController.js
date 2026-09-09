@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Order = require('../models/orderModel');
+const Delivery = require('../models/deliveryModel');
 const Lead = require('../models/leadModel');
 const ActivityLog = require('../models/activityLogModel');
 const User = require('../models/userModel');
@@ -147,6 +148,92 @@ const getOrders = async (req, res) => {
       Order.countDocuments({ ...statsQuery, status: { $regex: /^(in transit|dispatched|processing|converted)$/i } })
     ]);
 
+    // Calculate Growth comparison tags
+    let currentDelivered = deliveredCount;
+    let currentRto = rtoCount;
+    let prevDelivered = 0;
+    let prevRto = 0;
+    let tagSuffix = "(Daily)";
+
+    const baseStatsQuery = { ...statsQuery };
+    delete baseStatsQuery.createdAt;
+
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const yesterdayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 0, 0, 0, 0);
+    const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
+
+    if (startDate && endDate) {
+      const s = new Date(startDate);
+      const e = new Date(endDate);
+      const diffMs = e.getTime() - s.getTime();
+      const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+      if (diffDays <= 1) {
+        // Today or 1 day filter -> compare to previous day
+        tagSuffix = "(Daily)";
+        const prevStart = new Date(s.getFullYear(), s.getMonth(), s.getDate() - 1, 0, 0, 0, 0);
+        const prevEnd = new Date(s.getFullYear(), s.getMonth(), s.getDate() - 1, 23, 59, 59, 999);
+        
+        const [pDel, pRto] = await Promise.all([
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^rto$/i } })
+        ]);
+        prevDelivered = pDel;
+        prevRto = pRto;
+      } else if (diffDays >= 6 && diffDays <= 8) {
+        // Weekly (7 days) filter -> compare to previous week
+        tagSuffix = "(Weekly)";
+        const spanMs = (diffDays + 1) * 24 * 60 * 60 * 1000;
+        const prevStart = new Date(s.getTime() - spanMs);
+        const prevEnd = new Date(s.getTime() - 1);
+
+        const [pDel, pRto] = await Promise.all([
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^rto$/i } })
+        ]);
+        prevDelivered = pDel;
+        prevRto = pRto;
+      } else {
+        // Custom or Month range -> "custom kare to today nu j avvu joie" -> compare Today vs Yesterday
+        tagSuffix = "(Daily)";
+        const [cDel, cRto, pDel, pRto] = await Promise.all([
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^delivered$/i } }),
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^rto$/i } }),
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^delivered$/i } }),
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^rto$/i } })
+        ]);
+        prevDelivered = pDel;
+        prevRto = pRto;
+      }
+    } else {
+      // Default / No date filter -> compare Today vs Yesterday
+      tagSuffix = "(Daily)";
+      const [pDel, pRto] = await Promise.all([
+        Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^delivered$/i } }),
+        Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^rto$/i } })
+      ]);
+      prevDelivered = pDel;
+      prevRto = pRto;
+    }
+
+    const calcGrowth = (curr, prev, tag) => {
+      let pct = 0;
+      if (curr === 0) {
+        pct = 0;
+      } else if (prev > 0) {
+        pct = Math.round(((curr - prev) / prev) * 100);
+      } else if (curr > 0) {
+        pct = 100;
+      }
+      const sign = pct > 0 ? '+' : '';
+      return `${sign}${pct}% ${tag}`;
+    };
+
+    const deliveredGrowth = calcGrowth(currentDelivered, prevDelivered, tagSuffix);
+    const rtoGrowth = calcGrowth(currentRto, prevRto, tagSuffix);
+
     res.status(200).json({
       data: orders,
       total: count,
@@ -156,7 +243,9 @@ const getOrders = async (req, res) => {
       stats: {
         delivered: deliveredCount,
         rto: rtoCount,
-        inTransit: inTransitCount
+        inTransit: inTransitCount,
+        deliveredGrowth: deliveredGrowth,
+        rtoGrowth: rtoGrowth
       }
     });
   } catch (error) {
@@ -234,6 +323,27 @@ const createOrder = async (req, res) => {
     }
 
     const order = await Order.create(req.body);
+
+    try {
+      await Delivery.create({
+        orderId: order._id,
+        leadId: order.leadId,
+        name: order.name,
+        phone_number: order.phone_number,
+        products: order.products || [],
+        grandTotal: order.grandTotal,
+        paymentType: order.paymentType || 'COD',
+        courier: order.courier || '',
+        assginTo: order.assginTo,
+        transactionId: order.transactionId || '',
+        delivery_no: order.delivery_no || '',
+        status: order.status || 'IN TRANSIT',
+        statusReason: order.statusReason || '',
+        statusHistory: order.statusHistory || []
+      });
+    } catch (dErr) {
+      console.error('Error auto-creating delivery from order:', dErr);
+    }
 
     if (req.user) {
       await ActivityLog.create({

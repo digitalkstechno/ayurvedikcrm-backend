@@ -33,6 +33,9 @@ router.use('/leads', leadRoutes);
 const orderRoutes = require('./orderRoutes');
 router.use('/orders', orderRoutes);
 
+const deliveryRoutes = require('./deliveryRoutes');
+router.use('/deliveries', deliveryRoutes);
+
 const activityLogRoutes = require('./activityLogRoutes');
 router.use('/activity-logs', activityLogRoutes);
 

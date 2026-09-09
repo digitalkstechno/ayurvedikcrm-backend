@@ -453,6 +453,75 @@ const getStaffReturnStats = async (req, res) => {
       }
     ]);
 
+    // All-time Order Stats (for total booked orders count)
+    const allTimeOrderMatch = { isDeleted: { $ne: true } };
+    if (isOwn && req.user) {
+      allTimeOrderMatch.assginTo = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
+      const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
+      const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+      allTimeOrderMatch.assginTo = { $in: objectIds };
+    }
+
+    const allTimeOrderStats = await Order.aggregate([
+      { $match: allTimeOrderMatch },
+      {
+        $group: {
+          _id: "$assginTo",
+          booked: { $sum: 1 },
+          serumBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /serum/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          oilBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /oil/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const allTimeOrderMap = {};
+    allTimeOrderStats.forEach(o => {
+      if (o._id) allTimeOrderMap[o._id.toString()] = o;
+    });
+
     const orderMap = {};
     orderStats.forEach(o => {
       if (o._id) orderMap[o._id.toString()] = o;
@@ -465,21 +534,24 @@ const getStaffReturnStats = async (req, res) => {
 
     let rawStats = [];
 
+    const hasDateFilter = !!(startDate || endDate);
+
     // Map each staff member with data
     users.forEach((user) => {
       const uId = user._id.toString();
+      const allTimeOData = allTimeOrderMap[uId] || { booked: 0, serumBooked: 0, oilBooked: 0 };
       const oData = orderMap[uId] || { booked: 0, delivered: 0, serumBooked: 0, oilBooked: 0 };
       const rData = returnMap[uId] || { returns: 0, serumReturns: 0, oilReturns: 0, latestDate: null };
 
-      if (oData.delivered > 0 || rData.returns > 0) {
-        const booked = oData.booked || (rData.returns > 0 ? rData.returns : 0);
+      if (!hasDateFilter || oData.delivered > 0 || rData.returns > 0) {
+        const booked = allTimeOData.booked || 0;
         const delivered = oData.delivered || 0;
         const returns = rData.returns || 0;
         const deliveryRateNum = booked > 0 ? Math.round((delivered / booked) * 100 * 100) / 100 : 0;
         const serumReturnsCount = rData.serumReturns || 0;
         const oilReturnsCount = rData.oilReturns || 0;
-        const serumBookedCount = oData.serumBooked || (serumReturnsCount > 0 ? serumReturnsCount : 0);
-        const oilBookedCount = oData.oilBooked || (oilReturnsCount > 0 ? oilReturnsCount : 0);
+        const serumBookedCount = allTimeOData.serumBooked || 0;
+        const oilBookedCount = allTimeOData.oilBooked || 0;
 
         const serumRate = serumBookedCount > 0 ? Math.round((serumReturnsCount / serumBookedCount) * 100) : (serumReturnsCount > 0 ? 100 : 0);
         const oilRate = oilBookedCount > 0 ? Math.round((oilReturnsCount / oilBookedCount) * 100) : (oilReturnsCount > 0 ? 100 : 0);
@@ -1326,6 +1398,75 @@ const exportStaffReturnStats = async (req, res) => {
       }
     ]);
 
+    // All-time Order Stats (for total booked orders count)
+    const allTimeOrderMatch = { isDeleted: { $ne: true } };
+    if (isOwn && req.user) {
+      allTimeOrderMatch.assginTo = req.user._id;
+    } else if (assginTo && assginTo !== 'all') {
+      const ids = assginTo.split(',').map(id => id.trim()).filter(Boolean);
+      const objectIds = ids.map(id => mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id);
+      allTimeOrderMatch.assginTo = { $in: objectIds };
+    }
+
+    const allTimeOrderStats = await Order.aggregate([
+      { $match: allTimeOrderMatch },
+      {
+        $group: {
+          _id: "$assginTo",
+          booked: { $sum: 1 },
+          serumBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /serum/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          },
+          oilBooked: {
+            $sum: {
+              $cond: [
+                {
+                  $gt: [
+                    {
+                      $size: {
+                        $filter: {
+                          input: { $ifNull: ["$products", []] },
+                          as: "p",
+                          cond: { $regexMatch: { input: { $ifNull: ["$$p.name", ""] }, regex: /oil/i } }
+                        }
+                      }
+                    },
+                    0
+                  ]
+                },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      }
+    ]);
+
+    const allTimeOrderMap = {};
+    allTimeOrderStats.forEach(o => {
+      if (o._id) allTimeOrderMap[o._id.toString()] = o;
+    });
+
     const orderMap = {};
     orderStats.forEach(o => {
       if (o._id) orderMap[o._id.toString()] = o;
@@ -1336,22 +1477,24 @@ const exportStaffReturnStats = async (req, res) => {
       if (r._id) returnMap[r._id.toString()] = r;
     });
 
+    const hasDateFilter = !!(startDate || endDate);
     let rawStats = [];
 
     users.forEach((user) => {
       const uId = user._id.toString();
+      const allTimeOData = allTimeOrderMap[uId] || { booked: 0, serumBooked: 0, oilBooked: 0 };
       const oData = orderMap[uId] || { booked: 0, delivered: 0, serumBooked: 0, oilBooked: 0 };
       const rData = returnMap[uId] || { returns: 0, serumReturns: 0, oilReturns: 0, latestDate: null };
 
-      if (oData.delivered > 0 || rData.returns > 0) {
-        const booked = oData.booked || (rData.returns > 0 ? rData.returns : 0);
+      if (!hasDateFilter || oData.delivered > 0 || rData.returns > 0) {
+        const booked = allTimeOData.booked || 0;
         const delivered = oData.delivered || 0;
         const returns = rData.returns || 0;
         const deliveryRateNum = booked > 0 ? Math.round((delivered / booked) * 100 * 100) / 100 : 0;
         const serumReturnsCount = rData.serumReturns || 0;
         const oilReturnsCount = rData.oilReturns || 0;
-        const serumBookedCount = oData.serumBooked || (serumReturnsCount > 0 ? serumReturnsCount : 0);
-        const oilBookedCount = oData.oilBooked || (oilReturnsCount > 0 ? oilReturnsCount : 0);
+        const serumBookedCount = allTimeOData.serumBooked || 0;
+        const oilBookedCount = allTimeOData.oilBooked || 0;
 
         const serumRate = serumBookedCount > 0 ? Math.round((serumReturnsCount / serumBookedCount) * 100) : (serumReturnsCount > 0 ? 100 : 0);
         const oilRate = oilBookedCount > 0 ? Math.round((oilReturnsCount / oilBookedCount) * 100) : (oilReturnsCount > 0 ? 100 : 0);
@@ -1413,7 +1556,17 @@ const exportStaffReturnStats = async (req, res) => {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename=staff_return_report_${Date.now()}.csv`);
 
-    let csvContent = 'Rank,Staff Name,Booked,Delivered,Returns,Delivery %,Serum Returns,Oil Returns\n';
+    const todayFormattedPct = `${todayPercentage >= 0 ? '+' : ''}${todayPercentage}%`;
+    const weeklyFormattedPct = `${weeklyPercentage >= 0 ? '+' : ''}${weeklyPercentage}%`;
+
+    let csvContent = 'SUMMARY STATS\n';
+    csvContent += `"Metric","Value"\n`;
+    csvContent += `"Today's Returns","${todayCount} orders"\n`;
+    csvContent += `"Weekly Progress","${thisWeekCount} orders"\n`;
+    csvContent += `"${(prod1Card.productName || 'Serum Return Rate').replace(/"/g, '""')}","${prod1Card.formattedRate || prod1Card.rate + '%'}"\n`;
+    csvContent += `"${(prod2Card.productName || 'Oil Return Rate').replace(/"/g, '""')}","${prod2Card.formattedRate || prod2Card.rate + '%'}"\n\n`;
+
+    csvContent += 'Rank,Staff Name,Booked,Delivered,Returns,Delivery %,Serum Returns,Oil Returns\n';
     filteredStats.forEach((r) => {
       const nameEscaped = `"${(r.name || '').replace(/"/g, '""')}"`;
       csvContent += `${r.rank},${nameEscaped},${r.booked || 0},${r.delivered || 0},${r.returns || 0},"${r.deliveryPercentage || '0%'}",${r.serumRate || 0}%,${r.oilRate || 0}%\n`;

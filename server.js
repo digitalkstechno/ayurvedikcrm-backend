@@ -27,6 +27,8 @@ app.use('/api/products', productRoutes);
 app.use('/api/reason-to-calls', reasonToCallRoutes);
 app.use('/api/return-order-types', returnOrderTypeRoutes);
 app.use('/api/couriers', courierRoutes);
+const deliveryRoutes = require('./routes/deliveryRoutes');
+app.use('/api/deliveries', deliveryRoutes);
 app.use('/api/return-orders', returnOrderRoutes);
 app.use('/api/settings', settingRoutes);
 
