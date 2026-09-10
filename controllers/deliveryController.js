@@ -38,18 +38,55 @@ const parseProductFilter = (val) => {
   return null;
 };
 
-// Helper: Auto-sync from Order model so any converted lead/order appears in Delivery
+// Helper: Auto-sync between ReturnOrder, Order, and Delivery models so all statuses remain 100% identical
 const syncFromOrders = async () => {
   try {
+    // 1. Sync active ReturnOrders to Delivery & Order models
+    const activeReturnOrders = await ReturnOrder.find({ isDeleted: { $ne: true } });
+    for (const r of activeReturnOrders) {
+      const rType = (r.type || 'RTO').toUpperCase();
+      const statusToSync = (rType === 'DELIVERY' || rType === 'DELIVERED')
+        ? 'DELIVERED'
+        : ((rType === 'IN TRANSIT' || rType === 'INTRANSIT') ? 'IN TRANSIT' : 'RTO');
+
+      const queryOr = [];
+      if (r.orderId) {
+        queryOr.push({ orderId: r.orderId });
+        queryOr.push({ _id: r.orderId });
+      }
+      if (r.phone_number) queryOr.push({ phone_number: r.phone_number });
+
+      if (queryOr.length > 0) {
+        await Delivery.updateMany(
+          { $or: queryOr, isDeleted: { $ne: true }, status: { $ne: statusToSync } },
+          { $set: { status: statusToSync, statusDate: new Date() } }
+        );
+
+        await Order.updateMany(
+          { $or: queryOr, isDeleted: { $ne: true }, status: { $ne: statusToSync } },
+          { $set: { status: statusToSync } }
+        );
+      }
+    }
+
+    // 2. Sync from Order to Delivery for any new/missing or updated status
     const orders = await Order.find({ isDeleted: { $ne: true } });
     if (orders.length > 0) {
-      const existingDeliveries = await Delivery.find({ isDeleted: { $ne: true } }).select('orderId');
-      const existingOrderIds = new Set(existingDeliveries.map(d => d.orderId ? d.orderId.toString() : ''));
+      const existingDeliveries = await Delivery.find({ isDeleted: { $ne: true } });
+      const deliveryByOrderId = new Map();
+      const deliveryByPhone = new Map();
+
+      existingDeliveries.forEach(d => {
+        if (d.orderId) deliveryByOrderId.set(d.orderId.toString(), d);
+        if (d.phone_number) deliveryByPhone.set(d.phone_number, d);
+      });
 
       const deliveriesToInsert = [];
-      orders.forEach(o => {
+      for (const o of orders) {
         const oIdStr = o._id.toString();
-        if (!existingOrderIds.has(oIdStr)) {
+        const existing = deliveryByOrderId.get(oIdStr) || deliveryByPhone.get(o.phone_number);
+
+        if (!existing) {
           deliveriesToInsert.push({
             orderId: o._id,
             leadId: o.leadId,
@@ -68,8 +105,13 @@ const syncFromOrders = async () => {
             createdAt: o.createdAt,
             updatedAt: o.updatedAt
           });
+        } else if (o.status && existing.status !== o.status) {
+          existing.status = o.status;
+          if (o.statusReason) existing.statusReason = o.statusReason;
+          if (o.statusHistory) existing.statusHistory = o.statusHistory;
+          await existing.save();
         }
-      });
+      }
 
       if (deliveriesToInsert.length > 0) {
         await Delivery.insertMany(deliveriesToInsert);
@@ -196,10 +238,9 @@ const getDeliveries = async (req, res) => {
       Delivery.countDocuments({ ...statsQuery, status: { $regex: /^rto$/i } }),
       Delivery.countDocuments({ ...statsQuery, status: { $regex: /^(in transit|dispatched|processing|converted)$/i } })
     ]);
-    // These will be overridden below when no date filter is applied (All Data → show today's counts)
-    let deliveredCount = _deliveredCount;
-    let rtoCount = _rtoCount;
-    let inTransitCount = _inTransitCount;
+    const deliveredCount = _deliveredCount;
+    const rtoCount = _rtoCount;
+    const inTransitCount = _inTransitCount;
 
     // Calculate Growth comparison tags
     let currentDelivered = deliveredCount;
@@ -218,15 +259,23 @@ const getDeliveries = async (req, res) => {
     const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
 
     if (startDate && endDate) {
-      const s = new Date(startDate);
-      const e = new Date(endDate);
-      const diffMs = e.getTime() - s.getTime();
+      const [sY, sM, sD] = startDate.split('-').map(Number);
+      const [eY, eM, eD] = endDate.split('-').map(Number);
+
+      const sDateObj = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
+      const eDateObj = new Date(eY, eM - 1, eD, 23, 59, 59, 999);
+
+      const diffMs = Math.abs(eDateObj.getTime() - sDateObj.getTime());
       const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
       if (diffDays <= 1) {
+        // Single Day filter -> compare selected day vs day before it
         tagSuffix = "(Daily)";
-        const prevStart = new Date(s.getFullYear(), s.getMonth(), s.getDate() - 1, 0, 0, 0, 0);
-        const prevEnd = new Date(s.getFullYear(), s.getMonth(), s.getDate() - 1, 23, 59, 59, 999);
+        currentDelivered = deliveredCount;
+        currentRto = rtoCount;
+
+        const prevStart = new Date(sY, sM - 1, sD - 1, 0, 0, 0, 0);
+        const prevEnd = new Date(sY, sM - 1, sD - 1, 23, 59, 59, 999);
 
         const [pDel, pRto] = await Promise.all([
           Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
@@ -235,10 +284,30 @@ const getDeliveries = async (req, res) => {
         prevDelivered = pDel;
         prevRto = pRto;
       } else if (diffDays >= 6 && diffDays <= 8) {
+        // Weekly (7 days) filter -> compare selected week vs previous week
         tagSuffix = "(Weekly)";
+        currentDelivered = deliveredCount;
+        currentRto = rtoCount;
+
         const spanMs = (diffDays + 1) * 24 * 60 * 60 * 1000;
-        const prevStart = new Date(s.getTime() - spanMs);
-        const prevEnd = new Date(s.getTime() - 1);
+        const prevStart = new Date(sDateObj.getTime() - spanMs);
+        const prevEnd = new Date(sDateObj.getTime() - 1);
+
+        const [pDel, pRto] = await Promise.all([
+          Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
+          Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^rto$/i } })
+        ]);
+        prevDelivered = pDel;
+        prevRto = pRto;
+      } else if (diffDays >= 27 && diffDays <= 32) {
+        // Monthly (~30 days) filter -> compare selected month vs previous month
+        tagSuffix = "(Monthly)";
+        currentDelivered = deliveredCount;
+        currentRto = rtoCount;
+
+        const spanMs = (diffDays + 1) * 24 * 60 * 60 * 1000;
+        const prevStart = new Date(sDateObj.getTime() - spanMs);
+        const prevEnd = new Date(sDateObj.getTime() - 1);
 
         const [pDel, pRto] = await Promise.all([
           Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
@@ -247,6 +316,7 @@ const getDeliveries = async (req, res) => {
         prevDelivered = pDel;
         prevRto = pRto;
       } else {
+        // Custom date range -> Card counts reflect custom range, BUT rate% compares Today vs Yesterday
         tagSuffix = "(Daily)";
         const [cDel, cRto, pDel, pRto] = await Promise.all([
           Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^delivered$/i } }),
@@ -254,16 +324,17 @@ const getDeliveries = async (req, res) => {
           Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^delivered$/i } }),
           Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^rto$/i } })
         ]);
+        currentDelivered = cDel;
+        currentRto = cRto;
         prevDelivered = pDel;
         prevRto = pRto;
       }
     } else {
-      // No date filter (All Data): compare today vs yesterday, show today's counts in cards
+      // All Data (No date filter) -> Card counts reflect All Data, BUT rate% compares Today vs Yesterday
       tagSuffix = "(Daily)";
-      const [cDel, cRto, cTransit, pDel, pRto] = await Promise.all([
+      const [cDel, cRto, pDel, pRto] = await Promise.all([
         Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^delivered$/i } }),
         Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^rto$/i } }),
-        Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^(in transit|dispatched|processing|converted)$/i } }),
         Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^delivered$/i } }),
         Delivery.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^rto$/i } })
       ]);
@@ -271,20 +342,16 @@ const getDeliveries = async (req, res) => {
       currentRto = cRto;
       prevDelivered = pDel;
       prevRto = pRto;
-      // Override stat card totals with today-only counts for consistency
-      deliveredCount = cDel;
-      rtoCount = cRto;
-      inTransitCount = cTransit;
     }
 
     const calcGrowth = (curr, prev, tag) => {
       let pct = 0;
-      if (curr === 0) {
+      if (curr === 0 && prev === 0) {
         pct = 0;
-      } else if (prev > 0) {
-        pct = Math.round(((curr - prev) / prev) * 100);
-      } else if (curr > 0) {
+      } else if (prev === 0) {
         pct = 100;
+      } else {
+        pct = Math.round(((curr - prev) / prev) * 100);
       }
       const sign = pct > 0 ? '+' : '';
       return `${sign}${pct}% ${tag}`;
@@ -385,13 +452,26 @@ const updateDelivery = async (req, res) => {
       runValidators: true
     });
 
-    // Also sync status back to Order if orderId is referenced
-    if (updated.orderId) {
-      await Order.findByIdAndUpdate(updated.orderId, {
-        status: updated.status,
-        statusReason: updated.statusReason,
-        statusHistory: updated.statusHistory
-      });
+    // Also sync status back to Order (by orderId or phone_number)
+    try {
+      const orderQueryOr = [];
+      if (updated.orderId) orderQueryOr.push({ _id: updated.orderId });
+      if (updated.phone_number) orderQueryOr.push({ phone_number: updated.phone_number });
+
+      if (orderQueryOr.length > 0) {
+        await Order.updateMany(
+          { $or: orderQueryOr, isDeleted: { $ne: true } },
+          {
+            $set: {
+              status: updated.status,
+              statusReason: updated.statusReason,
+              statusHistory: updated.statusHistory
+            }
+          }
+        );
+      }
+    } catch (oErr) {
+      console.error('Error syncing delivery update to order:', oErr);
     }
 
     // Auto-create/sync or remove Return Order based on status

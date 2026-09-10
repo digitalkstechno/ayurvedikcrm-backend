@@ -4,6 +4,7 @@ const Delivery = require('../models/deliveryModel');
 const Lead = require('../models/leadModel');
 const ActivityLog = require('../models/activityLogModel');
 const User = require('../models/userModel');
+const ReturnOrder = require('../models/returnOrderModel');
 
 const escapeRegex = (str) => str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
@@ -37,11 +38,40 @@ const parseProductFilter = (val) => {
   return null;
 };
 
+const syncReturnOrdersToOrders = async () => {
+  try {
+    const activeReturnOrders = await ReturnOrder.find({ isDeleted: { $ne: true } });
+    for (const r of activeReturnOrders) {
+      const rType = (r.type || 'RTO').toUpperCase();
+      const statusToSync = (rType === 'DELIVERY' || rType === 'DELIVERED')
+        ? 'DELIVERED'
+        : ((rType === 'IN TRANSIT' || rType === 'INTRANSIT') ? 'IN TRANSIT' : 'RTO');
+
+      const queryOr = [];
+      if (r.orderId) {
+        queryOr.push({ orderId: r.orderId });
+        queryOr.push({ _id: r.orderId });
+      }
+      if (r.phone_number) queryOr.push({ phone_number: r.phone_number });
+
+      if (queryOr.length > 0) {
+        await Order.updateMany(
+          { $or: queryOr, isDeleted: { $ne: true }, status: { $ne: statusToSync } },
+          { $set: { status: statusToSync } }
+        );
+      }
+    }
+  } catch (err) {
+    console.error('Error syncing return orders to orders:', err);
+  }
+};
+
 // @desc    Get all orders
 // @route   GET /api/orders
 // @access  Public
 const getOrders = async (req, res) => {
   try {
+    await syncReturnOrdersToOrders();
     const { page = 1, limit = 100, search = '', assginTo, status, courier, product, startDate, endDate } = req.query;
     const query = {
       isDeleted: { $ne: true }
@@ -165,17 +195,24 @@ const getOrders = async (req, res) => {
     const yesterdayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 23, 59, 59, 999);
 
     if (startDate && endDate) {
-      const s = new Date(startDate);
-      const e = new Date(endDate);
-      const diffMs = e.getTime() - s.getTime();
+      const [sY, sM, sD] = startDate.split('-').map(Number);
+      const [eY, eM, eD] = endDate.split('-').map(Number);
+
+      const sDateObj = new Date(sY, sM - 1, sD, 0, 0, 0, 0);
+      const eDateObj = new Date(eY, eM - 1, eD, 23, 59, 59, 999);
+
+      const diffMs = Math.abs(eDateObj.getTime() - sDateObj.getTime());
       const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
 
       if (diffDays <= 1) {
-        // Today or 1 day filter -> compare to previous day
+        // Single Day filter -> compare selected day vs day before it
         tagSuffix = "(Daily)";
-        const prevStart = new Date(s.getFullYear(), s.getMonth(), s.getDate() - 1, 0, 0, 0, 0);
-        const prevEnd = new Date(s.getFullYear(), s.getMonth(), s.getDate() - 1, 23, 59, 59, 999);
-        
+        currentDelivered = deliveredCount;
+        currentRto = rtoCount;
+
+        const prevStart = new Date(sY, sM - 1, sD - 1, 0, 0, 0, 0);
+        const prevEnd = new Date(sY, sM - 1, sD - 1, 23, 59, 59, 999);
+
         const [pDel, pRto] = await Promise.all([
           Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
           Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^rto$/i } })
@@ -183,11 +220,30 @@ const getOrders = async (req, res) => {
         prevDelivered = pDel;
         prevRto = pRto;
       } else if (diffDays >= 6 && diffDays <= 8) {
-        // Weekly (7 days) filter -> compare to previous week
+        // Weekly (7 days) filter -> compare selected week vs previous week
         tagSuffix = "(Weekly)";
+        currentDelivered = deliveredCount;
+        currentRto = rtoCount;
+
         const spanMs = (diffDays + 1) * 24 * 60 * 60 * 1000;
-        const prevStart = new Date(s.getTime() - spanMs);
-        const prevEnd = new Date(s.getTime() - 1);
+        const prevStart = new Date(sDateObj.getTime() - spanMs);
+        const prevEnd = new Date(sDateObj.getTime() - 1);
+
+        const [pDel, pRto] = await Promise.all([
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
+          Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^rto$/i } })
+        ]);
+        prevDelivered = pDel;
+        prevRto = pRto;
+      } else if (diffDays >= 27 && diffDays <= 32) {
+        // Monthly (~30 days) filter -> compare selected month vs previous month
+        tagSuffix = "(Monthly)";
+        currentDelivered = deliveredCount;
+        currentRto = rtoCount;
+
+        const spanMs = (diffDays + 1) * 24 * 60 * 60 * 1000;
+        const prevStart = new Date(sDateObj.getTime() - spanMs);
+        const prevEnd = new Date(sDateObj.getTime() - 1);
 
         const [pDel, pRto] = await Promise.all([
           Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: prevStart, $lte: prevEnd }, status: { $regex: /^delivered$/i } }),
@@ -196,7 +252,7 @@ const getOrders = async (req, res) => {
         prevDelivered = pDel;
         prevRto = pRto;
       } else {
-        // Custom or Month range -> "custom kare to today nu j avvu joie" -> compare Today vs Yesterday
+        // Custom date range -> Card counts reflect custom range, BUT rate% compares Today vs Yesterday
         tagSuffix = "(Daily)";
         const [cDel, cRto, pDel, pRto] = await Promise.all([
           Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^delivered$/i } }),
@@ -204,28 +260,34 @@ const getOrders = async (req, res) => {
           Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^delivered$/i } }),
           Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^rto$/i } })
         ]);
+        currentDelivered = cDel;
+        currentRto = cRto;
         prevDelivered = pDel;
         prevRto = pRto;
       }
     } else {
-      // Default / No date filter -> compare Today vs Yesterday
+      // All Data (No date filter) -> Card counts reflect All Data, BUT rate% compares Today vs Yesterday
       tagSuffix = "(Daily)";
-      const [pDel, pRto] = await Promise.all([
+      const [cDel, cRto, pDel, pRto] = await Promise.all([
+        Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^delivered$/i } }),
+        Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: todayStart, $lte: todayEnd }, status: { $regex: /^rto$/i } }),
         Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^delivered$/i } }),
         Order.countDocuments({ ...baseStatsQuery, createdAt: { $gte: yesterdayStart, $lte: yesterdayEnd }, status: { $regex: /^rto$/i } })
       ]);
+      currentDelivered = cDel;
+      currentRto = cRto;
       prevDelivered = pDel;
       prevRto = pRto;
     }
 
     const calcGrowth = (curr, prev, tag) => {
       let pct = 0;
-      if (curr === 0) {
+      if (curr === 0 && prev === 0) {
         pct = 0;
-      } else if (prev > 0) {
-        pct = Math.round(((curr - prev) / prev) * 100);
-      } else if (curr > 0) {
+      } else if (prev === 0) {
         pct = 100;
+      } else {
+        pct = Math.round(((curr - prev) / prev) * 100);
       }
       const sign = pct > 0 ? '+' : '';
       return `${sign}${pct}% ${tag}`;
@@ -392,6 +454,98 @@ const updateOrder = async (req, res) => {
       new: true,
       runValidators: true
     });
+
+    // Auto-sync status and details to Delivery collection
+    try {
+      const deliveryOrConditions = [
+        { orderId: updated._id }
+      ];
+      if (updated.phone_number) {
+        deliveryOrConditions.push({ phone_number: updated.phone_number });
+      }
+
+      let existingDelivery = await Delivery.findOne({ $or: deliveryOrConditions, isDeleted: { $ne: true } });
+      if (existingDelivery) {
+        existingDelivery.status = updated.status || existingDelivery.status;
+        existingDelivery.statusReason = updated.statusReason || existingDelivery.statusReason;
+        existingDelivery.statusHistory = updated.statusHistory || existingDelivery.statusHistory;
+        existingDelivery.products = updated.products || existingDelivery.products;
+        existingDelivery.grandTotal = updated.grandTotal || existingDelivery.grandTotal;
+        existingDelivery.statusDate = new Date();
+        await existingDelivery.save();
+      } else {
+        await Delivery.create({
+          orderId: updated._id,
+          leadId: updated.leadId,
+          name: updated.name,
+          phone_number: updated.phone_number,
+          products: updated.products || [],
+          grandTotal: updated.grandTotal || 0,
+          paymentType: updated.paymentType || 'COD',
+          courier: updated.courier || '',
+          assginTo: updated.assginTo,
+          transactionId: updated.transactionId || '',
+          delivery_no: updated.delivery_no || '',
+          status: updated.status || 'IN TRANSIT',
+          statusReason: updated.statusReason || '',
+          statusHistory: updated.statusHistory || [],
+          statusDate: new Date()
+        });
+      }
+    } catch (dErr) {
+      console.error('Error syncing order update to delivery:', dErr);
+    }
+
+    // Auto-sync ReturnOrder model based on status
+    if (updated.status && updated.status.toUpperCase() === 'RTO') {
+      try {
+        const existingReturn = await ReturnOrder.findOne({
+          $or: [
+            { orderId: updated._id },
+            { phone_number: updated.phone_number }
+          ]
+        });
+
+        if (!existingReturn) {
+          await ReturnOrder.create({
+            orderId: updated._id,
+            customerName: updated.name,
+            phone_number: updated.phone_number,
+            assginTo: updated.assginTo,
+            products: updated.products || [],
+            amount: updated.grandTotal || 0,
+            type: 'RTO',
+            remark: updated.statusReason || 'Status changed to RTO',
+            isDeleted: false,
+            createdAt: new Date()
+          });
+        } else {
+          existingReturn.isDeleted = false;
+          existingReturn.deleteDate = undefined;
+          existingReturn.type = 'RTO';
+          existingReturn.remark = updated.statusReason || existingReturn.remark;
+          existingReturn.customerName = updated.name || existingReturn.customerName;
+          existingReturn.products = updated.products && updated.products.length > 0 ? updated.products : existingReturn.products;
+          existingReturn.amount = updated.grandTotal || existingReturn.amount;
+          await existingReturn.save();
+        }
+      } catch (rErr) {
+        console.error('Error auto-creating return order on order update:', rErr);
+      }
+    } else if (updated.status && updated.status.toUpperCase() !== 'RTO') {
+      try {
+        const queryOr = [
+          { orderId: updated._id },
+          { phone_number: updated.phone_number }
+        ];
+        await ReturnOrder.updateMany(
+          { $or: queryOr, isDeleted: { $ne: true } },
+          { $set: { isDeleted: true, deleteDate: new Date() } }
+        );
+      } catch (rErr) {
+        console.error('Error soft-deleting return order on order update:', rErr);
+      }
+    }
 
     if (updated.leadId && req.body.statusReason) {
       await Lead.findByIdAndUpdate(updated.leadId, {

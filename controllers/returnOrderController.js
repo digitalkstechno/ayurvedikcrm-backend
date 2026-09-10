@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const ReturnOrder = require('../models/returnOrderModel');
 const Order = require('../models/orderModel');
 const User = require('../models/userModel');
+const Delivery = require('../models/deliveryModel');
 
 const checkUserReportAccess = async (user) => {
   if (!user) return { isGlobal: false, isOwn: false };
@@ -210,6 +211,84 @@ const getReturnOrders = async (req, res) => {
 const createReturnOrder = async (req, res) => {
   try {
     const returnOrder = await ReturnOrder.create(req.body);
+
+    const targetType = (returnOrder.type || req.body.type || 'RTO').toUpperCase();
+    const statusToSync = (targetType === 'DELIVERY' || targetType === 'DELIVERED')
+      ? 'DELIVERED'
+      : ((targetType === 'IN TRANSIT' || targetType === 'INTRANSIT') ? 'IN TRANSIT' : 'RTO');
+
+    // Sync to Delivery model
+    try {
+      const deliveryOrConditions = [];
+      if (returnOrder.orderId) {
+        deliveryOrConditions.push({ orderId: returnOrder.orderId });
+        deliveryOrConditions.push({ _id: returnOrder.orderId });
+      }
+      if (returnOrder.phone_number) {
+        deliveryOrConditions.push({ phone_number: returnOrder.phone_number });
+      }
+
+      let existingDelivery = deliveryOrConditions.length > 0
+        ? await Delivery.findOne({ $or: deliveryOrConditions, isDeleted: { $ne: true } })
+        : null;
+
+      if (existingDelivery) {
+        existingDelivery.status = statusToSync;
+        existingDelivery.statusDate = new Date();
+        existingDelivery.statusHistory = [
+          ...(existingDelivery.statusHistory || []),
+          {
+            oldStatus: existingDelivery.status || 'IN TRANSIT',
+            newStatus: statusToSync,
+            reason: `Return Order created with type ${statusToSync}`,
+            updatedBy: req.user ? (req.user.name || req.user.email) : 'User',
+            createdAt: new Date()
+          }
+        ];
+        await existingDelivery.save();
+      } else {
+        await Delivery.create({
+          orderId: returnOrder.orderId || undefined,
+          name: returnOrder.customerName,
+          phone_number: returnOrder.phone_number,
+          products: returnOrder.products || [],
+          grandTotal: returnOrder.amount || 0,
+          assginTo: returnOrder.assginTo || undefined,
+          status: statusToSync,
+          statusDate: new Date(),
+          statusHistory: [{
+            oldStatus: 'IN TRANSIT',
+            newStatus: statusToSync,
+            reason: `Created from Return Order creation with status ${statusToSync}`,
+            updatedBy: req.user ? (req.user.name || req.user.email) : 'User',
+            createdAt: new Date()
+          }]
+        });
+      }
+    } catch (dErr) {
+      console.error('Error syncing return order creation to delivery:', dErr);
+    }
+
+    // Sync to Order model
+    try {
+      const orderOrConditions = [];
+      if (returnOrder.orderId) orderOrConditions.push({ _id: returnOrder.orderId });
+      if (returnOrder.phone_number) orderOrConditions.push({ phone_number: returnOrder.phone_number });
+
+      if (orderOrConditions.length > 0) {
+        await Order.updateMany(
+          { $or: orderOrConditions, isDeleted: { $ne: true } },
+          {
+            $set: {
+              status: statusToSync
+            }
+          }
+        );
+      }
+    } catch (oErr) {
+      console.error('Error syncing return order creation to order:', oErr);
+    }
+
     res.status(201).json(returnOrder);
   } catch (error) {
     if (error.code === 11000) {
@@ -227,6 +306,109 @@ const updateReturnOrder = async (req, res) => {
   try {
     const returnOrder = await ReturnOrder.findById(req.params.id);
     if (!returnOrder) return res.status(404).json({ message: 'Return order not found' });
+
+    const newType = (req.body.type || req.body.status || '').toUpperCase();
+
+    if (newType === 'DELIVERED' || newType === 'DELIVERY' || newType === 'IN TRANSIT' || newType === 'INTRANSIT') {
+      const targetStatus = (newType === 'DELIVERED' || newType === 'DELIVERY') ? 'DELIVERED' : 'IN TRANSIT';
+
+      // 1. Soft delete return order so it is removed from Return Order List page
+      await ReturnOrder.findByIdAndUpdate(req.params.id, {
+        type: targetStatus,
+        isDeleted: true,
+        deleteDate: new Date()
+      });
+
+      // 2. Sync / Update or Create Delivery record
+      const deliveryOrConditions = [];
+      if (returnOrder.orderId) {
+        deliveryOrConditions.push({ orderId: returnOrder.orderId });
+        deliveryOrConditions.push({ _id: returnOrder.orderId });
+      }
+      if (returnOrder.phone_number) {
+        deliveryOrConditions.push({ phone_number: returnOrder.phone_number });
+      }
+
+      let existingDelivery = deliveryOrConditions.length > 0
+        ? await Delivery.findOne({ $or: deliveryOrConditions, isDeleted: { $ne: true } })
+        : null;
+
+      if (existingDelivery) {
+        existingDelivery.status = targetStatus;
+        existingDelivery.statusDate = new Date();
+        existingDelivery.statusHistory = [
+          ...(existingDelivery.statusHistory || []),
+          {
+            oldStatus: 'RTO',
+            newStatus: targetStatus,
+            reason: `Type changed to ${targetStatus} from Return Order List`,
+            updatedBy: req.user ? (req.user.name || req.user.email) : 'User',
+            createdAt: new Date()
+          }
+        ];
+        await existingDelivery.save();
+      } else {
+        await Delivery.create({
+          orderId: returnOrder.orderId || undefined,
+          name: returnOrder.customerName,
+          phone_number: returnOrder.phone_number,
+          products: returnOrder.products || [],
+          grandTotal: returnOrder.amount || 0,
+          assginTo: returnOrder.assginTo || undefined,
+          status: targetStatus,
+          statusDate: new Date(),
+          statusHistory: [{
+            oldStatus: 'RTO',
+            newStatus: targetStatus,
+            reason: `Created from Return Order List with status ${targetStatus}`,
+            updatedBy: req.user ? (req.user.name || req.user.email) : 'User',
+            createdAt: new Date()
+          }]
+        });
+      }
+
+      // 3. Sync / Update or Create Order record
+      let existingOrder = null;
+      if (returnOrder.orderId) {
+        existingOrder = await Order.findById(returnOrder.orderId);
+      }
+      if (!existingOrder && returnOrder.phone_number) {
+        existingOrder = await Order.findOne({ phone_number: returnOrder.phone_number, isDeleted: { $ne: true } });
+      }
+
+      if (existingOrder) {
+        existingOrder.status = targetStatus;
+        existingOrder.statusHistory = [
+          ...(existingOrder.statusHistory || []),
+          {
+            oldStatus: 'RTO',
+            newStatus: targetStatus,
+            reason: `Type changed to ${targetStatus} from Return Order List`,
+            updatedBy: req.user ? (req.user.name || req.user.email) : 'User',
+            createdAt: new Date()
+          }
+        ];
+        await existingOrder.save();
+      } else if (targetStatus === 'IN TRANSIT') {
+        await Order.create({
+          name: returnOrder.customerName,
+          phone_number: returnOrder.phone_number,
+          products: returnOrder.products || [],
+          grandTotal: returnOrder.amount || 0,
+          assginTo: returnOrder.assginTo || undefined,
+          status: targetStatus,
+          statusHistory: [{
+            oldStatus: 'RTO',
+            newStatus: targetStatus,
+            reason: `Created from Return Order List with status ${targetStatus}`,
+            updatedBy: req.user ? (req.user.name || req.user.email) : 'User',
+            createdAt: new Date()
+          }]
+        });
+      }
+
+      return res.status(200).json({ message: `Return order moved to ${targetStatus}` });
+    }
 
     const updated = await ReturnOrder.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
@@ -754,6 +936,8 @@ const exportReturnOrders = async (req, res) => {
   }
 };
 
+
+//Return Order Report List page api
 // @desc    Get return order summary stats (Today's Returns, Weekly Progress, Product Return Rates)
 // @route   GET /api/return-orders/stats/summary
 // @access  Public
