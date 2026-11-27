@@ -32,6 +32,10 @@ const leadSchema = mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Status'
   },
+  lead_status: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'LeadStatus'
+  },
   reason_call: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ReasonToCall'

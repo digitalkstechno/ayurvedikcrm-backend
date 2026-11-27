@@ -179,4 +179,29 @@ const resetPassword = async (req, res) => {
   }
 };
 
-module.exports = { loginUser, forgotPassword, resetPassword };
+// @desc    Get current logged-in user & latest role permissions
+// @route   GET /api/auth/me
+const getMe = async (req, res) => {
+  try {
+    const user = req.user;
+    const roleDocs = await Role.find({ name: { $in: user.roles || [] } });
+    let permissions = {};
+    roleDocs.forEach(r => {
+      if (r.permissions) {
+        permissions = { ...permissions, ...r.permissions };
+      }
+    });
+
+    res.status(200).json({
+      _id: user._id,
+      name: user.name,
+      email: user.email,
+      roles: user.roles,
+      permissions
+    });
+  } catch (error) {
+    res.status(400).json({ message: error.message });
+  }
+};
+
+module.exports = { loginUser, forgotPassword, resetPassword, getMe };

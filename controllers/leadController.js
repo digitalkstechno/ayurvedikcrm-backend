@@ -44,7 +44,7 @@ const parseProductFilter = (val) => {
 // @access  Public
 const getLeads = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search = '', assgin, status, reason_call, product, startDate, endDate, reminderStartDate, reminderEndDate, isRepeat, isDeleted, age, orderStatus } = req.query;
+    const { page = 1, limit = 10, search = '', assgin, status, lead_status, reason_call, product, startDate, endDate, reminderStartDate, reminderEndDate, isRepeat, isDeleted, age, orderStatus } = req.query;
     const query = {};
 
     if (isDeleted === 'true') {
@@ -146,6 +146,9 @@ const getLeads = async (req, res) => {
     const statusFilter = parseObjectIdFilter(status);
     if (statusFilter) query.status = statusFilter;
 
+    const leadStatusFilter = parseObjectIdFilter(lead_status);
+    if (leadStatusFilter) query.lead_status = leadStatusFilter;
+
     const reasonFilter = parseObjectIdFilter(reason_call);
     if (reasonFilter) query.reason_call = reasonFilter;
 
@@ -205,6 +208,7 @@ const getLeads = async (req, res) => {
       Lead.find(query)
         .populate('assgin', 'name')
         .populate('status', 'name color')
+        .populate('lead_status', 'name')
         .populate('reason_call', 'name')
         .populate('customer', 'name phone_number')
         .limit(limit * 1)
@@ -246,6 +250,7 @@ const getLeadById = async (req, res) => {
     const lead = await Lead.findById(req.params.id)
       .populate('assgin', 'name')
       .populate('status', 'name color')
+      .populate('lead_status', 'name')
       .populate('reason_call', 'name')
       .populate('customer', 'name phone_number');
     if (!lead) {
@@ -280,6 +285,7 @@ const getLatestLeadByPhone = async (req, res) => {
     const latestLead = await Lead.findOne({ customer: customer._id })
       .populate('assgin', 'name')
       .populate('status', 'name color')
+      .populate('lead_status', 'name')
       .populate('reason_call', 'name')
       .populate('products.productId', 'name amount')
       .sort({ createdAt: -1 });
@@ -333,6 +339,9 @@ const createLead = async (req, res) => {
     );
 
     const payload = { ...rest, customer: customerId, isRepeat: Boolean(req.body.isRepeat) };
+    if (payload.lead_status === '') {
+      delete payload.lead_status;
+    }
     if (!isAdmin) {
       payload.assgin = req.user ? req.user._id : undefined;
     }
@@ -460,6 +469,9 @@ const updateLead = async (req, res) => {
 
     const { name, phone_number, ...rest } = req.body;
     let payload = { ...rest };
+    if (payload.lead_status === '') {
+      payload.lead_status = null;
+    }
 
     const statusChanged = req.body.status && req.body.status.toString() !== (lead.status ? lead.status.toString() : '');
     const orderStatusChanged = req.body.orderStatus !== undefined && req.body.orderStatus !== lead.orderStatus;
@@ -549,7 +561,7 @@ const deleteLead = async (req, res) => {
 
 const exportLeads = async (req, res) => {
   try {
-    const { search = '', assgin, status, reason_call, product, startDate, endDate, age, orderStatus } = req.query;
+    const { search = '', assgin, status, lead_status, reason_call, product, startDate, endDate, age, orderStatus } = req.query;
     const query = { isDeleted: { $ne: true } };
 
     if (search) {
@@ -632,6 +644,9 @@ const exportLeads = async (req, res) => {
 
     const statusFilter = parseObjectIdFilter(status);
     if (statusFilter) query.status = statusFilter;
+
+    const leadStatusFilter = parseObjectIdFilter(lead_status);
+    if (leadStatusFilter) query.lead_status = leadStatusFilter;
 
     const reasonFilter = parseObjectIdFilter(reason_call);
     if (reasonFilter) query.reason_call = reasonFilter;
