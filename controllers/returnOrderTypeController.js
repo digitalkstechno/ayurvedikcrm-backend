@@ -1,4 +1,5 @@
 const ReturnOrderType = require('../models/returnOrderTypeModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all return order types (with pagination & search)
 // @route   GET /api/return-order-types?page=1&limit=10&search=name
@@ -59,6 +60,14 @@ const createReturnOrderType = async (req, res) => {
       return res.status(400).json({ message: 'Return order type name is required' });
     }
     const type = await ReturnOrderType.create({ name });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Return Order Type Created',
+      message: `Return Order Type "${type.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(201).json(type);
   } catch (error) {
         if (error.code === 11000) {
@@ -76,6 +85,14 @@ const updateReturnOrderType = async (req, res) => {
     const type = await ReturnOrderType.findById(req.params.id);
     if (!type) return res.status(404).json({ message: 'Return order type not found' });
     const updated = await ReturnOrderType.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Return Order Type Updated',
+      message: `Return Order Type "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

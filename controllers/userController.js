@@ -1,4 +1,5 @@
 const User = require('../models/userModel');
+const { createNotification } = require('../utils/notificationHelper');
 const { encryptPassword, decryptPassword } = require('../utils/cryptoUtils');
 
 // @desc    Get all users (with pagination & search)
@@ -105,6 +106,13 @@ const createUser = async (req, res) => {
       roles: roles ? (Array.isArray(roles) ? roles : [roles]) : []
     });
 
+    await createNotification({
+      req,
+      title: 'User Created',
+      message: `User "${user.name}" was created by ${req.user?.name || 'Staff'}`,
+      category: 'TEAM'
+    });
+
     res.status(201).json(user);
   } catch (error) {
         if (error.code === 11000) {
@@ -147,6 +155,12 @@ const updateUser = async (req, res) => {
     }
 
     const updated = await User.findByIdAndUpdate(req.params.id, updateData, { new: true, runValidators: true }).select('-password');
+    await createNotification({
+      req,
+      title: 'User Updated',
+      message: `User "${updated.name}" was updated by ${req.user?.name || 'Staff'}`,
+      category: 'TEAM'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

@@ -1,4 +1,5 @@
 const Courier = require('../models/courierModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all couriers (with pagination & search)
 // @route   GET /api/couriers
@@ -61,6 +62,14 @@ const createCourier = async (req, res) => {
     if (exists) return res.status(400).json({ message: 'Courier already exists' });
 
     const courier = await Courier.create({ name });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Courier Created',
+      message: `Courier "${courier.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'COURIER'
+    });
     res.status(201).json(courier);
   } catch (error) {
         if (error.code === 11000) {
@@ -83,6 +92,14 @@ const updateCourier = async (req, res) => {
       { name: req.body.name },
       { new: true, runValidators: true }
     );
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Courier Updated',
+      message: `Courier "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'COURIER'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

@@ -1,6 +1,7 @@
 const Lead = require('../models/leadModel');
 const Customer = require('../models/customerModel');
 const ActivityLog = require('../models/activityLogModel');
+const { createNotification, formatDateDDMMYYYY } = require('../utils/notificationHelper');
 const { sendLeadEventToFacebook } = require('../services/facebookCapi');
 const mongoose = require('mongoose');
 const User = require('../models/userModel');
@@ -366,6 +367,16 @@ const createLead = async (req, res) => {
       });
     }
 
+    const leadCustomerLabel = name || phone_number || 'Customer';
+    const actorLabel = req.user?.name || 'Staff';
+    await createNotification({
+      req,
+      title: 'New Lead Created',
+      message: `Lead for ${leadCustomerLabel} was created by ${actorLabel}`,
+      category: 'LEAD',
+      recipientId: lead.assgin || req.user?._id
+    });
+
     res.status(201).json(lead);
   } catch (error) {
     if (error.code === 11000) {
@@ -516,6 +527,23 @@ const updateLead = async (req, res) => {
         lead: updated._id,
         action,
         message: logMsg
+      });
+    }
+
+    let updatedCustomerLabel = name || phone_number;
+    if (!updatedCustomerLabel && updated.customer) {
+      const cust = await Customer.findById(updated.customer).select('name phone_number').lean();
+      updatedCustomerLabel = cust?.name || cust?.phone_number;
+    }
+    updatedCustomerLabel = updatedCustomerLabel || 'Lead';
+    const updaterLabel = req.user?.name || 'Staff';
+    if (!(orderStatusChanged && updated.orderStatus === true)) {
+      await createNotification({
+        req,
+        title: 'Lead Updated',
+        message: `Lead for ${updatedCustomerLabel} was updated by ${updaterLabel}`,
+        category: 'LEAD',
+        recipientId: updated.assgin || req.user?._id
       });
     }
 

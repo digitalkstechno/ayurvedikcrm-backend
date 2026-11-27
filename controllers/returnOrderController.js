@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const ReturnOrder = require('../models/returnOrderModel');
 const Order = require('../models/orderModel');
 const User = require('../models/userModel');
+const { createNotification } = require('../utils/notificationHelper');
 const Delivery = require('../models/deliveryModel');
 
 const checkUserReportAccess = async (user) => {
@@ -288,6 +289,14 @@ const createReturnOrder = async (req, res) => {
     } catch (oErr) {
       console.error('Error syncing return order creation to order:', oErr);
     }
+
+    await createNotification({
+      req,
+      title: 'Order Returned',
+      message: `Return order created for ${returnOrder.customerName || returnOrder.phone_number || 'Customer'} by ${req.user?.name || 'Staff'}`,
+      category: 'RETURN ORDER',
+      recipientId: returnOrder.assginTo || req.user?._id
+    });
 
     res.status(201).json(returnOrder);
   } catch (error) {

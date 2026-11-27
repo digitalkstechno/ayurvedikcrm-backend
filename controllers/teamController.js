@@ -1,4 +1,5 @@
 const Team = require('../models/teamModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all teams (with pagination & search)
 // @route   GET /api/teams
@@ -67,6 +68,14 @@ const createTeam = async (req, res) => {
       head,
       member: member || []
     });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Team Created',
+      message: `Team "${team.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'TEAM'
+    });
     res.status(201).json(team);
   } catch (error) {
         if (error.code === 11000) {
@@ -85,6 +94,14 @@ const updateTeam = async (req, res) => {
     if (!team) return res.status(404).json({ message: 'Team not found' });
 
     const updated = await Team.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Team Updated',
+      message: `Team "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'TEAM'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

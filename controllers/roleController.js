@@ -1,4 +1,5 @@
 const Role = require('../models/roleModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all roles (with pagination & search)
 // @route   GET /api/roles?page=1&limit=10&search=name
@@ -59,6 +60,14 @@ const createRole = async (req, res) => {
       return res.status(400).json({ message: 'Role name is required' });
     }
     const role = await Role.create({ name, permissions: permissions || {} });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Role Created',
+      message: `Role "${role.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'TEAM'
+    });
     res.status(201).json(role);
   } catch (error) {
         if (error.code === 11000) {
@@ -76,6 +85,14 @@ const updateRole = async (req, res) => {
     const role = await Role.findById(req.params.id);
     if (!role) return res.status(404).json({ message: 'Role not found' });
     const updated = await Role.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Role Updated',
+      message: `Role "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'TEAM'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

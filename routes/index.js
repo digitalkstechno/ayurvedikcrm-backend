@@ -44,4 +44,7 @@ router.use('/activity-logs', activityLogRoutes);
 const dashboardRoutes = require('./dashboardRoutes');
 router.use('/dashboard', dashboardRoutes);
 
+const notificationRoutes = require('./notificationRoutes');
+router.use('/notifications', notificationRoutes);
+
 module.exports = router;

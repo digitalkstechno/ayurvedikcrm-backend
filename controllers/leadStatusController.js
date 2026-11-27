@@ -1,4 +1,5 @@
 const LeadStatus = require('../models/leadStatusModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all lead statuses (with pagination & search)
 // @route   GET /api/lead-statuses?page=1&limit=10&search=name
@@ -55,6 +56,14 @@ const createLeadStatus = async (req, res) => {
       return res.status(400).json({ message: 'Lead status name is required' });
     }
     const leadStatus = await LeadStatus.create({ name: name.trim() });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Lead Status Created',
+      message: `Lead Status "${leadStatus.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(201).json(leadStatus);
   } catch (error) {
     if (error.code === 11000) {
@@ -82,6 +91,14 @@ const updateLeadStatus = async (req, res) => {
       { name: name.trim() },
       { new: true, runValidators: true }
     );
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Lead Status Updated',
+      message: `Lead Status "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(200).json(updated);
   } catch (error) {
     if (error.code === 11000) {

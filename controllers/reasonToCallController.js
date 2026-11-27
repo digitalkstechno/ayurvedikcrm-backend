@@ -1,4 +1,5 @@
 const ReasonToCall = require('../models/reasonToCallModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all reason to calls (with pagination & search)
 // @route   GET /api/reason-to-calls?page=1&limit=10&search=name
@@ -59,6 +60,14 @@ const createReasonToCall = async (req, res) => {
       return res.status(400).json({ message: 'Reason to call name is required' });
     }
     const reason = await ReasonToCall.create({ name });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Reason to Call Created',
+      message: `Reason to Call "${reason.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(201).json(reason);
   } catch (error) {
         if (error.code === 11000) {
@@ -76,6 +85,14 @@ const updateReasonToCall = async (req, res) => {
     const reason = await ReasonToCall.findById(req.params.id);
     if (!reason) return res.status(404).json({ message: 'Reason to call not found' });
     const updated = await ReasonToCall.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Reason to Call Updated',
+      message: `Reason to Call "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

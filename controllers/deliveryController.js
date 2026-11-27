@@ -3,6 +3,7 @@ const Delivery = require('../models/deliveryModel');
 const Order = require('../models/orderModel');
 const Lead = require('../models/leadModel');
 const ActivityLog = require('../models/activityLogModel');
+const { createNotification } = require('../utils/notificationHelper');
 const User = require('../models/userModel');
 const ReturnOrder = require('../models/returnOrderModel');
 
@@ -548,6 +549,25 @@ const updateDelivery = async (req, res) => {
         action: statusChanged ? 'Delivery Status Change' : 'Update',
         message: logMessage
       });
+    }
+
+    if (statusChanged) {
+      await createNotification({
+        req,
+        title: 'Delivery Status Changed',
+        message: `Delivery for ${updated.name || updated.phone_number || 'Customer'} changed to ${updated.status} by ${req.user?.name || 'Staff'}`,
+        category: 'DELIVERY',
+        recipientId: updated.assginTo || req.user?._id
+      });
+      if (updated.status && updated.status.toUpperCase() === 'RTO') {
+        await createNotification({
+          req,
+          title: 'Order Returned',
+          message: `Order for ${updated.name || updated.phone_number || 'Customer'} was returned (RTO) by ${req.user?.name || 'Staff'}`,
+          category: 'RETURN ORDER',
+          recipientId: updated.assginTo || req.user?._id
+        });
+      }
     }
 
     res.status(200).json(updated);

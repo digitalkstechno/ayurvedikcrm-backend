@@ -1,4 +1,5 @@
 const Customer = require('../models/customerModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all customers
 // @route   GET /api/customers
@@ -48,6 +49,14 @@ const getCustomers = async (req, res) => {
 const createCustomer = async (req, res) => {
   try {
     const customer = await Customer.create(req.body);
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Customer Created',
+      message: `Customer "${customer.name || customer.phone_number}" was created by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(201).json(customer);
   } catch (error) {
         if (error.code === 11000) {
@@ -68,6 +77,14 @@ const updateCustomer = async (req, res) => {
       return res.status(404).json({ message: 'Customer not found' });
     }
     const updated = await Customer.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Customer Updated',
+      message: `Customer "${updated.name || updated.phone_number}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

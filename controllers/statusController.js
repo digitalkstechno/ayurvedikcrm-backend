@@ -1,4 +1,5 @@
 const Status = require('../models/statusModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 // @desc    Get all statuses (with pagination & search)
 // @route   GET /api/statuses?page=1&limit=10&search=name
@@ -59,6 +60,14 @@ const createStatus = async (req, res) => {
       return res.status(400).json({ message: 'Status name is required' });
     }
     const status = await Status.create({ name, color: color || '#3b82f6' });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Status Created',
+      message: `Status "${status.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(201).json(status);
   } catch (error) {
         if (error.code === 11000) {
@@ -76,6 +85,14 @@ const updateStatus = async (req, res) => {
     const status = await Status.findById(req.params.id);
     if (!status) return res.status(404).json({ message: 'Status not found' });
     const updated = await Status.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Status Updated',
+      message: `Status "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {

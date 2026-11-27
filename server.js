@@ -10,6 +10,7 @@ const returnOrderTypeRoutes = require('./routes/returnOrderTypeRoutes');
 const courierRoutes = require('./routes/courierRoutes');
 const returnOrderRoutes = require('./routes/returnOrderRoutes');
 const settingRoutes = require('./routes/settingRoutes');
+const { startReminderScheduler } = require('./utils/notificationHelper');
 
 // Connect to Database
 connectDB();
@@ -39,4 +40,7 @@ app.get('/', (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  startReminderScheduler();
+});

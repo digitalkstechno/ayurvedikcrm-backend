@@ -1,4 +1,5 @@
 const Product = require('../models/productModel');
+const { createNotification, getActorFromRequest } = require('../utils/notificationHelper');
 
 const escapeRegex = (str) => str.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
 
@@ -65,6 +66,14 @@ const createProduct = async (req, res) => {
       return res.status(400).json({ message: 'Amount is required' });
     }
     const product = await Product.create({ name, amount, cod_dicount: cod_dicount || 0, prepad_disocount: prepad_disocount || 0 });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Product Created',
+      message: `Product "${product.name}" was created by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(201).json(product);
   } catch (error) {
         if (error.code === 11000) {
@@ -82,6 +91,14 @@ const updateProduct = async (req, res) => {
     const product = await Product.findById(req.params.id);
     if (!product) return res.status(404).json({ message: 'Product not found' });
     const updated = await Product.findByIdAndUpdate(req.params.id, req.body, { new: true, runValidators: true });
+    const actor = await getActorFromRequest(req);
+    await createNotification({
+      req,
+      actorUser: actor,
+      title: 'Product Updated',
+      message: `Product "${updated.name}" was updated by ${actor?.name || 'Staff'}`,
+      category: 'MASTER'
+    });
     res.status(200).json(updated);
   } catch (error) {
         if (error.code === 11000) {
